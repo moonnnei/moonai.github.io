@@ -1,0 +1,6 @@
+[theme]
+name = "linux-notes"
+description = "A clean, content-first theme for Linux learning notes blog"
+author = "Codex"
+license = "MIT"
+min_version = "0.110.0"

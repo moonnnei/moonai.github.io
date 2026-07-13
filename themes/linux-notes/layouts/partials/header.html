@@ -1,0 +1,10 @@
+<header class="site-header">
+  <div class="site-title"><a href="{{ "/" | relLangURL }}">{{ .Site.Title }}</a></div>
+  {{ with .Site.Params.subtitle }}<div class="site-desc">{{ . }}</div>{{ end }}
+  <nav class="site-nav">
+    <a href="{{ "/" | relLangURL }}" {{ if .IsHome }}class="current"{{ end }}>首页</a>
+    <a href="{{ "/posts/" | relLangURL }}" {{ if eq .Section "posts" }}class="current"{{ end }}>文章</a>
+    <a href="{{ "/tags/" | relLangURL }}" {{ if eq .Section "tags" }}class="current"{{ end }}>标签</a>
+    <a href="{{ "/about/" | relLangURL }}" {{ if eq .RelPermalink "/about/" }}class="current"{{ end }}>关于</a>
+  </nav>
+</header>

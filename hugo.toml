@@ -1,0 +1,29 @@
+baseURL = "https://moonai.github.io/"
+locale = "zh-CN"
+title = "Linux 学习笔记"
+theme = "linux-notes"
+defaultContentLanguage = "zh"
+disableKinds = ["RSS", "sitemap"]
+
+[params]
+  subtitle = "记录 Linux 学习路上的点滴"
+  description = "一个关于 Linux 系统学习、命令行技巧、运维实践的博客。从基础到进阶，持续记录和分享。"
+  greeting = "你好，欢迎来到我的 Linux 学习笔记"
+
+[markup]
+  [markup.highlight]
+    codeFences = true
+    lineNos = true
+    lineNumbersInTable = true
+    style = "github"
+
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
+
+[taxonomies]
+  tag = "tags"
+  category = "categories"
+
+[permalinks]
+  posts = "/posts/:year/:month/:slug/"
