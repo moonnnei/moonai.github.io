@@ -58,6 +58,7 @@ spi总线和类注册后，当有驱动和设备匹配上就会调用spi_match_d
 1.of_spi_register_master，根据设备树节点中的“cs-gpio“，向struct spi_master添加gpio cs引脚
 2.device_add将设备注册到总线驱动设备模型中
 3.如果控制器驱动没有实现transfer函数，则初始化发送队列 spi_master_initialize_queue，核心层默认填充transfer函数
+
 ```c
 4.spi_match_master_to_boardinfo(老的设备发现方法)遍历所有的spi_board_info数据结构，并注册spi_device
 ```
@@ -88,6 +89,7 @@ spi_start_queue函数用于唤醒工作线程
 ![](image12.png)
 就是把spi_transfer这个buffer添加到spi_message传输链表中
 ### spi_async(供从设备调用)
+
 ```c
 用于发起数据传输，从spi_async-&gt;__spi_async-&gt;master-&gt;transfer。asyn是异步执行，不会等待传输是否完成，直接返回。
 ```
@@ -111,6 +113,7 @@ spi_sync用来同步传输message，完成传输后调spi_complete唤醒等待�
 编辑
 
 ![](image15.png)
+
 ```c
 如果 master 驱动没有显式设置 master-&gt;mode_bits，则设置为默认的模式位，包括CPOL,CPHA,flag（位移传输结构体中标记位）
 ```
@@ -145,6 +148,7 @@ spi控制器卸载
 ![](image18.png)
 ## SPI控制器驱动示例
 ### probe（初始化spi_master）
+
 ```c
 static int spi_imx_probe(struct platform_device *pdev){
 struct device_node *np = pdev-&gt;dev.of_node;
@@ -268,6 +272,7 @@ spi_master_put(master);return ret;
 解析设备树获得设备，内核创建platform_device，调用platform_driver_register匹配驱动，成功后调用probe函数
 流程如下
 ①获取设备信息
+
 ```c
 np = pdev-&gt;dev.of_node       ← DT 节点of_id = of_match_device()     ← DT 匹配到的设备类型mxc_platform_info             ← 老式 platform_data（不用 DT 时）
 ```
@@ -277,6 +282,7 @@ spi_alloc_master(sizeof(spi_imx_data))
 ③设置master基本参数和回调
 bits_per_word_mask, bus_numbitbang.chipselect, setup_transfer, txrx_bufs
 ④初始化硬件资源
+
 ```c
 init_completion(&amp;xfer_done)         ← PIO 传输等待点devm_ioremap_resource              ← 寄存器映射devm_request_irq(spi_imx_isr)     ← 中断devm_clk_get(clk_ipg / clk_per)    ← 时钟
 ```
@@ -298,6 +304,7 @@ spi_master是对控制器的内核抽象，spi_imx是同一个控制器的私有
 spi_master是核心层能理解的结构体，只有bus_num，transfer_one，queue等通用字段
 spi_imx_data是具体控制器驱动需要的结构体，它含有 base（寄存器虚拟地址）、clk_per、devtype_data、txfifo 等硬件相关的字段
 所以 spi_alloc_master 一次分配了两块连续内存：
+
 ```c
 一条 malloc 出来的内存：┌──────────────────┬─────────────────┐│ struct spi_master                  │  struct spi_imx_data           ││ (核心层认识的部分)              │ (spi-imx.c 私有的状态)       ││                                              │                                            ││ bus_num = 0                        │  base = 0x02010000          ││ transfer_one                         │  clk_per / clk_ipg               ││ queue / kworker                    │  devtype_data                   ││ cs_gpios[]                             │  tx_buf / rx_buf / count       ││ ...                                          │  xfer_done                          │└──────────────────┴─────────────────┘^                                               ^│                                              │master 指针                              spi_master_get_devdata(master)                                                 (= spi_imx 指针)
 ```
@@ -311,6 +318,7 @@ spi_imx_data是具体控制器驱动需要的结构体，它含有 base（寄存
 初始话dma寄存器。进行控制器初始化和复位。
 ### spi_imx_setupxfer(设置位宽和配置控制器)
 在 bitbang 框架的 spi_bitbang_transfer_one_message 中，每个 transfer 执行前都会调一次 setup_transfer（即 spi_imx_setupxfer）。它的职责是针对当前 transfer 的速率和字长，配置好硬件，准备好收发函数。
+
 ```c
 1. 确定这次传输的速率和字长 2. 根据字长选择 tx/rx 函数指针（u8/u16/u32） 3. 判断走 PIO 还是 DMA 4. 如果走 DMA，配置 DMA 参数 5. 调 devtype_data-&gt;config 写硬件寄存器
 ```
@@ -340,6 +348,7 @@ writel将要发送的数据值写入到 ECSPI 的 TXDATA 寄存器里面去
 
 ![](image28.png)
 三部分拆开看：
+
 ```c
 spi_imx-&gt;devtype_data = of_id ? of_id-&gt;data : (另一分支);
 │         │
@@ -350,6 +359,7 @@ spi_imx-&gt;devtype_data = of_id ? of_id-&gt;data : (另一分支);
 ```
 
 of_id 来自上一行：
+
 ```c
 const struct of_device_id *of_id =
 of_match_device(spi_imx_dt_ids, &amp;pdev-&gt;dev);
@@ -359,6 +369,7 @@ of_match_device 用设备树节点的 compatible 去遍历 spi_imx_dt_ids[] 表�
 编辑
 
 ![](image29.png)
+
 ```c
 设备树中说 compatible = &quot;fsl,imx6ul-ecspi&quot;，匹配后 of_id 指向匹配到的表项，of_id-&gt;data 就是 &amp;imx6ul_ecspi_devtype_data。
 ```
@@ -367,6 +378,7 @@ of_match_device 用设备树节点的 compatible 去遍历 spi_imx_dt_ids[] 表�
 
 ![](image30.png)
 这样便拿到了config
+
 ```c
 static int mx51_ecspi_config(struct spi_device *spi,
 struct spi_imx_config *config){
@@ -375,9 +387,6 @@ u32 ctrl = MX51_ECSPI_CTRL_ENABLE;
 u32 clk = config-&gt;speed_hz, delay, reg;
 u32 cfg = readl(spi_imx-&gt;base + MX51_ECSPI_CONFIG);
 int tx_wml = 0;
-```
-
-```c
 /*
 * The hardware seems to have a race condition when changing modes. The
 * current assumption is that the selection of the channel arrives
@@ -386,35 +395,17 @@ int tx_wml = 0;
 * So set master mode for all channels as we do not support slave mode.
 */
 ctrl |= MX51_ECSPI_CTRL_MODE_MASK;
-```
-
-```c
 /* set clock speed */
 ctrl |= mx51_ecspi_clkdiv(spi_imx, config-&gt;speed_hz, &amp;clk);
 spi_imx-&gt;spi_bus_clk = clk;
-```
-
-```c
 /* set chip select to use */
 ctrl |= MX51_ECSPI_CTRL_CS(spi-&gt;chip_select);
-```
-
-```c
 ctrl |= (config-&gt;bpw - 1) &lt;&lt; MX51_ECSPI_CTRL_BL_OFFSET;
-```
-
-```c
 cfg |= MX51_ECSPI_CONFIG_SBBCTRL(spi-&gt;chip_select);
-```
-
-```c
 if (spi-&gt;mode &amp; SPI_CPHA)
 cfg |= MX51_ECSPI_CONFIG_SCLKPHA(spi-&gt;chip_select);
 else
 cfg &amp;= ~MX51_ECSPI_CONFIG_SCLKPHA(spi-&gt;chip_select);
-```
-
-```c
 if (spi-&gt;mode &amp; SPI_CPOL) {
 cfg |= MX51_ECSPI_CONFIG_SCLKPOL(spi-&gt;chip_select);
 cfg |= MX51_ECSPI_CONFIG_SCLKCTL(spi-&gt;chip_select);
@@ -426,32 +417,17 @@ if (spi-&gt;mode &amp; SPI_CS_HIGH)
 cfg |= MX51_ECSPI_CONFIG_SSBPOL(spi-&gt;chip_select);
 else
 cfg &amp;= ~MX51_ECSPI_CONFIG_SSBPOL(spi-&gt;chip_select);
-```
-
-```c
 if (spi_imx-&gt;usedma)
 ctrl |= MX51_ECSPI_CTRL_SMC;
-```
-
-```c
 /* CTRL register always go first to bring out controller from reset */
 writel(ctrl, spi_imx-&gt;base + MX51_ECSPI_CTRL);
-```
-
-```c
 reg = readl(spi_imx-&gt;base + MX51_ECSPI_TESTREG);
 if (spi-&gt;mode &amp; SPI_LOOP)
 reg |= MX51_ECSPI_TESTREG_LBC;
 else
 reg &amp;= ~MX51_ECSPI_TESTREG_LBC;
 writel(reg, spi_imx-&gt;base + MX51_ECSPI_TESTREG);
-```
-
-```c
 writel(cfg, spi_imx-&gt;base + MX51_ECSPI_CONFIG);
-```
-
-```c
 /*
 * Wait until the changes in the configuration register CONFIGREG
 * propagate into the hardware. It takes exactly one tick of the
@@ -468,31 +444,23 @@ if (likely(delay &lt; 10))/* SCLK is faster than 100 kHz */
 udelay(delay);
 else/* SCLK is _very_ slow */
 usleep_range(delay, delay + 10);
-```
-
-```c
 /*
 * Configure the DMA register: setup the watermark
 * and enable DMA request.
 */
 if (spi_imx-&gt;devtype_data-&gt;devtype == IMX6UL_ECSPI)
 tx_wml = spi_imx-&gt;wml / 2;
-```
-
-```c
 writel(MX51_ECSPI_DMA_RX_WML(spi_imx-&gt;wml) |
 MX51_ECSPI_DMA_TX_WML(tx_wml) |
 MX51_ECSPI_DMA_RXT_WML(spi_imx-&gt;wml) |
 MX51_ECSPI_DMA_TEDEN | MX51_ECSPI_DMA_RXDEN |
 MX51_ECSPI_DMA_RXTDEN, spi_imx-&gt;base + MX51_ECSPI_DMA);
-```
-
-```c
 return 0;
 }
 ```
 
 调用关系如下：mx51_ecspi_config就是最底层SPI master的寄存器配置
+
 ```c
 spi_imx-&gt;bitbang.setup_transfer = spi_imx_setupxfer
 spi_imx-&gt;devtype_data-&gt;config = mx51_ecspi_config
@@ -508,6 +476,7 @@ PIO（Programmed I/O，程序控制输入输出） 和 DMA（Direct Memory Acces
 PIO 传输
 CPU 亲自参与每个字节的搬运。
 以 spi-imx 的 PIO 路径为例：
+
 ```c
 // 写一个字节到 TXFIFO——CPU 亲手写寄存器
 spi_imx_buf_tx_u8:
@@ -521,6 +490,7 @@ val = readl(base + MXC_CSPIRXDATA);  // CPU 读寄存器
 
 PIO 传输中，每发一个字节：CPU 读内存 → CPU 写 TXFIFO → 等待中断 → CPU 读 RXFIFO → CPU 写内存。全程 CPU 都在忙。
 PIO 的典型时序图：
+
 ```c
 CPU   ──┬──────┬──────┬──────┬──────┬──
 写     等     读     写
@@ -528,11 +498,13 @@ FIFO  中断    FIFO   FIFO
 ```
 
 DMA 传输
+
 ```c
 CPU 告诉 DMA 引擎&quot;帮我把这段内存的数据搬过去&quot;，然后去做别的事。DMA 引擎自己读内存、写 FIFO、读 FIFO、写内存。
 ```
 
 以 spi-imx 的 DMA 路径为例：
+
 ```c
 // CPU 做的事只有这些：dmaengine_prep_slave_sg(master-&gt;dma_tx, tx_sg, ...);  // 准备 DMA 描述符dmaengine_submit(desc_tx);                              // 提交dma_async_issue_pending(master-&gt;dma_tx);                // 启动
 // 然后 CPU 去做别的事了// DMA 引擎自动搬运数据
@@ -540,6 +512,7 @@ CPU 告诉 DMA 引擎&quot;帮我把这段内存的数据搬过去&quot;，然�
 
 DMA 传输中，CPU 只做设置和收尾，中间的每一个字节搬运都由 DMA 引擎独立完成。
 DMA 的典型时序图：
+
 ```c
 CPU   ──┬─────────────────────────┬──
 设置DMA                   等待完成
@@ -572,15 +545,13 @@ CPU 占用
 spi_imx_pio_transfer
 spi_imx_dma_transfer
 SPI 中怎么决定走 PIO 还是 DMA
+
 ```c
 // spi_imx_setupxfer 中
 if (spi_imx_can_dma(spi_imx-&gt;bitbang.master, spi, t))
 spi_imx-&gt;usedma = 1;
 else
 spi_imx-&gt;usedma = 0;
-```
-
-```c
 // spi_imx_transfer 中
 if (spi_imx-&gt;usedma)
 return spi_imx_dma_transfer(spi_imx, transfer);
@@ -590,6 +561,7 @@ return spi_imx_pio_transfer(spi, transfer);
 
 can_dma 的判断通常是传输长度是否超过某个阈值——几个字节用 PIO，几十 KB 用 DMA。
 #### spi_imx_dma_transfer
+
 ```c
 static int spi_imx_dma_transfer(struct spi_imx_data *spi_imx,
 struct spi_transfer *transfer){
@@ -598,9 +570,6 @@ unsigned long transfer_timeout;
 unsigned long timeout;
 struct spi_master *master = spi_imx-&gt;bitbang.master;
 struct sg_table *tx = &amp;transfer-&gt;tx_sg, *rx = &amp;transfer-&gt;rx_sg;
-```
-
-```c
 /*
 * The TX DMA setup starts the transfer, so make sure RX is configured
 * before TX.
@@ -610,17 +579,11 @@ rx-&gt;sgl, rx-&gt;nents, DMA_DEV_TO_MEM,
 DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
 if (!desc_rx)
 return -EINVAL;
-```
-
-```c
 desc_rx-&gt;callback = spi_imx_dma_rx_callback;
 desc_rx-&gt;callback_param = (void *)spi_imx;
 dmaengine_submit(desc_rx);
 reinit_completion(&amp;spi_imx-&gt;dma_rx_completion);
 dma_async_issue_pending(master-&gt;dma_rx);
-```
-
-```c
 desc_tx = dmaengine_prep_slave_sg(master-&gt;dma_tx,
 tx-&gt;sgl, tx-&gt;nents, DMA_MEM_TO_DEV,
 DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
@@ -628,25 +591,13 @@ if (!desc_tx) {
 dmaengine_terminate_all(master-&gt;dma_tx);
 return -EINVAL;
 }
-```
-
-```c
 desc_tx-&gt;callback = spi_imx_dma_tx_callback;
 desc_tx-&gt;callback_param = (void *)spi_imx;
 dmaengine_submit(desc_tx);
 reinit_completion(&amp;spi_imx-&gt;dma_tx_completion);
 dma_async_issue_pending(master-&gt;dma_tx);
-```
-
-```c
 transfer_timeout = spi_imx_calculate_timeout(spi_imx, transfer-&gt;len);
-```
-
-```c
 spi_imx-&gt;devtype_data-&gt;trigger(spi_imx);
-```
-
-```c
 /* Wait SDMA to finish the data transfer.*/
 timeout = wait_for_completion_timeout(&amp;spi_imx-&gt;dma_tx_completion,
 transfer_timeout);
@@ -656,9 +607,6 @@ dmaengine_terminate_all(master-&gt;dma_tx);
 dmaengine_terminate_all(master-&gt;dma_rx);
 return -ETIMEDOUT;
 }
-```
-
-```c
 timeout = wait_for_completion_timeout(&amp;spi_imx-&gt;dma_rx_completion,
 transfer_timeout);
 if (!timeout) {
@@ -667,46 +615,26 @@ spi_imx-&gt;devtype_data-&gt;reset(spi_imx);
 dmaengine_terminate_all(master-&gt;dma_rx);
 return -ETIMEDOUT;
 }
-```
-
-```c
 return transfer-&gt;len;
 }
 ```
 
 #### spi_imx_dio_transfer
+
 ```c
 static int spi_imx_pio_transfer(struct spi_device *spi,
 struct spi_transfer *transfer){
 struct spi_imx_data *spi_imx = spi_master_get_devdata(spi-&gt;master);
 unsigned long transfer_timeout;
 unsigned long timeout;
-```
-
-```c
 spi_imx-&gt;tx_buf = transfer-&gt;tx_buf;
 spi_imx-&gt;rx_buf = transfer-&gt;rx_buf;
 spi_imx-&gt;count = transfer-&gt;len;
 spi_imx-&gt;txfifo = 0;
-```
-
-```c
 reinit_completion(&amp;spi_imx-&gt;xfer_done);
-```
-
-```c
 spi_imx_push(spi_imx);
-```
-
-```c
 spi_imx-&gt;devtype_data-&gt;intctrl(spi_imx, MXC_INT_TE);
-```
-
-```c
 transfer_timeout = spi_imx_calculate_timeout(spi_imx, transfer-&gt;len);
-```
-
-```c
 timeout = wait_for_completion_timeout(&amp;spi_imx-&gt;xfer_done,
 transfer_timeout);
 if (!timeout) {
@@ -714,14 +642,12 @@ dev_err(&amp;spi-&gt;dev, &quot;I/O Error in PIO\n&quot;);
 spi_imx-&gt;devtype_data-&gt;reset(spi_imx);
 return -ETIMEDOUT;
 }
-```
-
-```c
 return transfer-&gt;len;
 }
 ```
 
 ##### spi_imx_push
+
 ```c
 static void spi_imx_push(struct spi_imx_data *spi_imx){
 while (spi_imx-&gt;txfifo &lt; spi_imx_get_fifosize(spi_imx)) {
@@ -730,12 +656,10 @@ break;
 spi_imx-&gt;tx(spi_imx);
 spi_imx-&gt;txfifo++;
 }
-```
-
-```c
 spi_imx-&gt;devtype_data-&gt;trigger(spi_imx);
 }
 ```
+
 
 ```c
 spi_imx_transfer
@@ -748,6 +672,7 @@ spi_imx_transfer
 编辑
 
 ![](image32.png)
+
 ```c
 中断服务程序，只要rx_available,启用spi_imx-&gt;rx。从MXC_CSPIRXDATA 寄存器读出数据。
 ```
@@ -779,6 +704,7 @@ spi_imx_transfer
 设备驱动核心就分这 5 大块，任何一个驱动都是这个骨架：
 块一：驱动对象声明
 告诉内核&quot;我是谁、我在哪条总线上走、怎么匹配到我&quot;。
+
 ```c
 static struct spi_driver my_driver = {
 .driver = {
@@ -794,6 +720,7 @@ static struct spi_driver my_driver = {
 
 块二：probe — 初始化
 匹配成功时调用，做资源申请和硬件初始化。标准步骤：
+
 ```c
 ① devm_kzalloc 分配私有数据结构
 ② spi_setup() 配置控制器（模式/速率/字长）
@@ -804,6 +731,7 @@ static struct spi_driver my_driver = {
 
 块三：数据传输 — 读写操作
 业务逻辑的核心，用 SPI 的传输 API 和硬件交互：
+
 ```c
 spi_write() / spi_read()           半双工spi_write_then_read()              先写后读（寄存器读写最常用）spi_sync() / spi_message()         全双工、多 transferspi_async()                        异步传输
 ```
@@ -815,11 +743,13 @@ sysfs：device_create_file，最轻量，cat/echo 就能交互
 内核子系统：input / IIO / hwmon 等，享受子系统的标准 API 和工具链
 块五：remove — 清理
 probe 的逆操作，资源交还：
+
 ```c
 ① devm_ 的资源自动释放
 ② device_remove_file / device_destroy
 ③ 非 devm_ 的资源手动释放（kfree、free_irq）
 ```
+
 
 ```c
 其实就是&quot;注册 → probe → 业务 → 接口 → remove&quot;五段论，无论你写 SPI、I2C、PCI 还是 Platform 驱动，骨架都是这个结构，换的只是总线和传输 API。
@@ -882,6 +812,7 @@ spi_register_driver按照标准流程注册spidev从设备驱动。
 
 ![](image48.png)
 #### spidev的probe
+
 ```c
 static const struct of_device_id spidev_dt_ids[] = {
 { .compatible = &quot;rohm,dh2228fv&quot; },
@@ -903,9 +834,6 @@ static int spidev_probe(struct spi_device *spi){
 struct spidev_data*spidev;
 intstatus;
 unsigned longminor;
-```
-
-```c
 /*
 * spidev should never be referenced in DT without a specific
 * compatible string, it is a Linux implementation thing
@@ -916,31 +844,16 @@ dev_err(&amp;spi-&gt;dev, &quot;buggy DT: spidev listed directly in DT\n&quot;);
 WARN_ON(spi-&gt;dev.of_node &amp;&amp;
 !of_match_device(spidev_dt_ids, &amp;spi-&gt;dev));
 }
-```
-
-```c
 spidev_probe_acpi(spi);
-```
-
-```c
 /* Allocate driver data */
 spidev = kzalloc(sizeof(*spidev), GFP_KERNEL);
 if (!spidev)
 return -ENOMEM;
-```
-
-```c
 /* Initialize the driver data */
 spidev-&gt;spi = spi;
 spin_lock_init(&amp;spidev-&gt;spi_lock);
 mutex_init(&amp;spidev-&gt;buf_lock);
-```
-
-```c
 INIT_LIST_HEAD(&amp;spidev-&gt;device_entry);
-```
-
-```c
 /* If we can allocate a minor number, hook up this device.
 * Reusing minors is fine so long as udev or mdev is working.
 */
@@ -948,9 +861,6 @@ mutex_lock(&amp;device_list_lock);
 minor = find_first_zero_bit(minors, N_SPI_MINORS);
 if (minor &lt; N_SPI_MINORS) {
 struct device *dev;
-```
-
-```c
 spidev-&gt;devt = MKDEV(SPIDEV_MAJOR, minor);
 dev = device_create(spidev_class, &amp;spi-&gt;dev, spidev-&gt;devt,
 spidev, &quot;spidev%d.%d&quot;,
@@ -965,20 +875,11 @@ set_bit(minor, minors);
 list_add(&amp;spidev-&gt;device_entry, &amp;device_list);
 }
 mutex_unlock(&amp;device_list_lock);
-```
-
-```c
 spidev-&gt;speed_hz = spi-&gt;max_speed_hz;
-```
-
-```c
 if (status == 0)
 spi_set_drvdata(spi, spidev);
 else
 kfree(spidev);
-```
-
-```c
 return status;
 }
 ```
@@ -986,22 +887,25 @@ return status;
 调用device_create创建了/dev/下的spidev节点,主设备号SPIDEV_MAJOR= 153，如spi总线0上cs1设备，则设备名为/dev/spidev0.1，其他以此类推。
 #### spidev_fops
 ##### spidev_read
+
 ```c
 spidev_read    -&gt;spidev_sync_read        -&gt;spidev_sync            -&gt;spi_sync
 ```
 
 ##### spidev_write
 
-![](image49.png)
 ```c
 spidev_write
 -&gt;spidev_sync_write
 -&gt;spidev_sync
 -&gt;spi_sync编辑
+
+![](image49.png)
 ```
 
 构造spi_message,spi_transfer调用spi_sync进行数据传输。
 ### spidev_ioctl
+
 ```c
 static longspidev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg){
 interr = 0;
@@ -1011,15 +915,9 @@ struct spi_device*spi;
 u32tmp;
 unsignedn_ioc;
 struct spi_ioc_transfer*ioc;
-```
-
-```c
 /* Check type and command number */
 if (_IOC_TYPE(cmd) != SPI_IOC_MAGIC)
 return -ENOTTY;
-```
-
-```c
 /* Check access direction once here; don't repeat below.
 * IOC_DIR is from the user perspective, while access_ok is
 * from the kernel perspective; so they look reversed.
@@ -1032,9 +930,6 @@ err = !access_ok(VERIFY_READ,
 (void __user *)arg, _IOC_SIZE(cmd));
 if (err)
 return -EFAULT;
-```
-
-```c
 /* guard against device removal before, or while,
 * we issue this ioctl.
 */
@@ -1042,14 +937,8 @@ spidev = filp-&gt;private_data;
 spin_lock_irq(&amp;spidev-&gt;spi_lock);
 spi = spi_dev_get(spidev-&gt;spi);
 spin_unlock_irq(&amp;spidev-&gt;spi_lock);
-```
-
-```c
 if (spi == NULL)
 return -ESHUTDOWN;
-```
-
-```c
 /* use the buffer lock here for triple duty:
 *  - prevent I/O (from us) so calling spi_setup() is safe;
 *  - prevent concurrent SPI_IOC_WR_* from morphing
@@ -1057,9 +946,6 @@ return -ESHUTDOWN;
 *  - SPI_IOC_MESSAGE needs the buffer locked &quot;normally&quot;.
 */
 mutex_lock(&amp;spidev-&gt;buf_lock);
-```
-
-```c
 switch (cmd) {
 /* read requests */
 case SPI_IOC_RD_MODE:
@@ -1080,9 +966,6 @@ break;
 case SPI_IOC_RD_MAX_SPEED_HZ:
 retval = __put_user(spidev-&gt;speed_hz, (__u32 __user *)arg);
 break;
-```
-
-```c
 /* write requests */
 case SPI_IOC_WR_MODE:
 case SPI_IOC_WR_MODE32:
@@ -1092,16 +975,10 @@ else
 retval = __get_user(tmp, (u32 __user *)arg);
 if (retval == 0) {
 u32save = spi-&gt;mode;
-```
-
-```c
 if (tmp &amp; ~SPI_MODE_MASK) {
 retval = -EINVAL;
 break;
 }
-```
-
-```c
 tmp |= spi-&gt;mode &amp; ~SPI_MODE_MASK;
 spi-&gt;mode = (u16)tmp;
 retval = spi_setup(spi);
@@ -1115,9 +992,6 @@ case SPI_IOC_WR_LSB_FIRST:
 retval = __get_user(tmp, (__u8 __user *)arg);
 if (retval == 0) {
 u32save = spi-&gt;mode;
-```
-
-```c
 if (tmp)
 spi-&gt;mode |= SPI_LSB_FIRST;
 else
@@ -1134,9 +1008,6 @@ case SPI_IOC_WR_BITS_PER_WORD:
 retval = __get_user(tmp, (__u8 __user *)arg);
 if (retval == 0) {
 u8save = spi-&gt;bits_per_word;
-```
-
-```c
 spi-&gt;bits_per_word = tmp;
 retval = spi_setup(spi);
 if (retval &lt; 0)
@@ -1149,9 +1020,6 @@ case SPI_IOC_WR_MAX_SPEED_HZ:
 retval = __get_user(tmp, (__u32 __user *)arg);
 if (retval == 0) {
 u32save = spi-&gt;max_speed_hz;
-```
-
-```c
 spi-&gt;max_speed_hz = tmp;
 retval = spi_setup(spi);
 if (retval &gt;= 0)
@@ -1161,9 +1029,6 @@ dev_dbg(&amp;spi-&gt;dev, &quot;%d Hz (max)\n&quot;, tmp);
 spi-&gt;max_speed_hz = save;
 }
 break;
-```
-
-```c
 default:
 /* segmented and/or full-duplex I/O request */
 /* Check message and copy into scratch area */
@@ -1175,17 +1040,11 @@ break;
 }
 if (!ioc)
 break;/* n_ioc is also 0 */
-```
-
-```c
 /* translate to spi_message, execute */
 retval = spidev_message(spidev, ioc, n_ioc);
 kfree(ioc);
 break;
 }
-```
-
-```c
 mutex_unlock(&amp;spidev-&gt;buf_lock);
 spi_dev_put(spi);
 return retval;
@@ -1195,6 +1054,7 @@ return retval;
 编辑
 
 ![](image50.png)
+
 ```c
 switch (cmd) {
 /* read requests */
@@ -1216,9 +1076,6 @@ break;
 case SPI_IOC_RD_MAX_SPEED_HZ:
 retval = __put_user(spidev-&gt;speed_hz, (__u32 __user *)arg);
 break;
-```
-
-```c
 /* write requests */
 case SPI_IOC_WR_MODE:
 case SPI_IOC_WR_MODE32:
@@ -1228,16 +1085,10 @@ else
 retval = __get_user(tmp, (u32 __user *)arg);
 if (retval == 0) {
 u32save = spi-&gt;mode;
-```
-
-```c
 if (tmp &amp; ~SPI_MODE_MASK) {
 retval = -EINVAL;
 break;
 }
-```
-
-```c
 tmp |= spi-&gt;mode &amp; ~SPI_MODE_MASK;
 spi-&gt;mode = (u16)tmp;
 retval = spi_setup(spi);
@@ -1251,9 +1102,6 @@ case SPI_IOC_WR_LSB_FIRST:
 retval = __get_user(tmp, (__u8 __user *)arg);
 if (retval == 0) {
 u32save = spi-&gt;mode;
-```
-
-```c
 if (tmp)
 spi-&gt;mode |= SPI_LSB_FIRST;
 else
@@ -1270,9 +1118,6 @@ case SPI_IOC_WR_BITS_PER_WORD:
 retval = __get_user(tmp, (__u8 __user *)arg);
 if (retval == 0) {
 u8save = spi-&gt;bits_per_word;
-```
-
-```c
 spi-&gt;bits_per_word = tmp;
 retval = spi_setup(spi);
 if (retval &lt; 0)
@@ -1285,9 +1130,6 @@ case SPI_IOC_WR_MAX_SPEED_HZ:
 retval = __get_user(tmp, (__u32 __user *)arg);
 if (retval == 0) {
 u32save = spi-&gt;max_speed_hz;
-```
-
-```c
 spi-&gt;max_speed_hz = tmp;
 retval = spi_setup(spi);
 if (retval &gt;= 0)
@@ -1297,9 +1139,6 @@ dev_dbg(&amp;spi-&gt;dev, &quot;%d Hz (max)\n&quot;, tmp);
 spi-&gt;max_speed_hz = save;
 }
 break;
-```
-
-```c
 default:
 /* segmented and/or full-duplex I/O request */
 /* Check message and copy into scratch area */
@@ -1311,9 +1150,6 @@ break;
 }
 if (!ioc)
 break;/* n_ioc is also 0 */
-```
-
-```c
 /* translate to spi_message, execute */
 retval = spidev_message(spidev, ioc, n_ioc);
 kfree(ioc);
@@ -1369,6 +1205,7 @@ spidev.c 注册的是 spi_driver
 挂载在 usb_bus_type 上
 另外还有 MMC、SERIO、MDIO 等等，都是按总线划分。
 两个维度交叉看：spidev 到底属于哪种？
+
 ```c
 char    block    net
 platform  │       │       │
@@ -1380,6 +1217,7 @@ usb      ttyUSB   │      wlan
 
 spidev 是交叉点：它既是 spi_driver（按总线分），又是字符设备（按设备类型分）。
 这个理解很关键：
+
 ```c
 spi_driver 的身份让它能被 SPI 总线识别、匹配、probe——解决&quot;怎么找到硬件&quot;的问题
 chrdev 的身份让它能暴露 /dev/spidev0.0 给用户态——解决&quot;怎么和用户交互&quot;的问题
@@ -1393,6 +1231,7 @@ gpiolib：platform_driver + chrdev（/dev/gpiochip0）
 ## 一、通用设备驱动模型（drivers/base/）
 Linux 设备模型的三大支柱，所有总线/设备/驱动都基于它们。
 ### struct bus_type — 总线抽象
+
 ```c
 struct bus_type {
 const char *name;                              // 总线名，如 &quot;spi&quot;
@@ -1406,6 +1245,7 @@ struct subsys_private *p;                      // 内部：设备/驱动链表
 
 关键：match 是总线的核心职责。spi 总线的 spi_match_device 按 DT → ACPI → id_table → name 顺序匹配。总线内部维护了两个链表——这条总线上的所有设备和所有驱动。
 ### struct device — 设备抽象
+
 ```c
 struct device {
 const char *init_name;          // 设备名
@@ -1417,11 +1257,13 @@ struct kobject kobj;            // sysfs 入口
 };
 ```
 
+
 ```c
 关键：device 是&quot;对象&quot;——总线上挂的是 device，驱动 match 的是 device，probe 传入的也是 device。driver_data 是最常用的字段——通过 dev_set_drvdata/dev_get_drvdata 访问。在 SPI 里包装为 spi_set_drvdata/spi_get_drvdata。
 ```
 
 ### struct device_driver — 驱动抽象
+
 ```c
 struct device_driver {
 const char *name;
@@ -1439,47 +1281,34 @@ struct driver_private *p;       // 内部：sysfs/klist
 ```
 
 ### 三者的关系
+
 ```c
 bus_type 维护两个链表：
 ├── 设备链表：struct device 通过 bus-&gt;p-&gt;devices_kset 链接
 └── 驱动链表：struct device_driver 通过 bus-&gt;p-&gt;drivers_kset 链接
-```
-
-```c
 匹配时：
 bus-&gt;match(device, driver) → 成功 → driver-&gt;probe(device)
 ```
 
 ## 二、SPI 核心层（spi.h / spi.c）
 ### struct spi_master — SPI 控制器抽象（核心层最重要的结构）
+
 ```c
 struct spi_master {
 struct device dev;                  // 内嵌 device，挂到 spi_master class
-```
-
-```c
 /* 参数 */
 s16 bus_num;                        // 总线编号
 u16 num_chipselect;                 // CS 数量
 u32 mode_bits;                      // 支持的模式位
 u32 bits_per_word_mask;             // 支持的 bpw 掩码
 u32 min_speed_hz, max_speed_hz;     // 速率范围
-```
-
-```c
 /* 消息泵 */
 struct list_head queue;             // 消息队列
 struct kthread_worker *kworker;     // kthread 工作者
 struct task_struct *kworker_task;   // kthread 任务
-```
-
-```c
 /* DMA */
 struct dma_chan *dma_tx, *dma_rx;
 int (*can_dma)(...);
-```
-
-```c
 /* 回调 — host 层实现 */
 int (*setup)(struct spi_device *spi);
 int (*transfer_one_message)(...);   // 处理一个 message
@@ -1487,9 +1316,6 @@ int (*transfer_one)(...);           // 处理一个 transfer
 int (*prepare_message)(...);        // message 前开时钟
 int (*unprepare_message)(...);      // message 后关时钟
 void (*cleanup)(...);
-```
-
-```c
 /* 设备自动注册 */
 void *(*cs_gpios);                  // CS GPIO 列表
 };
@@ -1497,6 +1323,7 @@ void *(*cs_gpios);                  // CS GPIO 列表
 
 关键：spi_master 是 SPI 核心层与 HOST 控制器驱动之间的契约。核心层通过回调（transfer_one_message、setup）调用 HOST 层；HOST 层通过 spi_alloc_master 分配它，并填充回调。
 ### struct spi_device — SPI 设备抽象
+
 ```c
 struct spi_device {
 struct device dev;                  // 内嵌 device，挂到 spi bus
@@ -1511,11 +1338,13 @@ const char *modalias;               // 用于匹配的名字
 };
 ```
 
+
 ```c
 关键：每个 SPI 外设芯片对应一个 spi_device。设备驱动通过 to_spi_device(dev) 从通用 struct device 获取它。
 ```
 
 ### struct spi_transfer — 单次传输段
+
 ```c
 struct spi_transfer {
 const void *tx_buf;                 // 发送数据
@@ -1530,6 +1359,7 @@ u32 tx_nbits, rx_nbits;             // 多线模式（DUAL/QUAD）
 ```
 
 ### struct spi_message — SPI 事务
+
 ```c
 struct spi_message {
 struct list_head transfers;         // transfer 链表
@@ -1543,6 +1373,7 @@ void *context;                      // 回调参数
 
 关键：spi_message 包含多个 spi_transfer，在同一个 CS 周期内按序执行。这是 SPI 子系统最核心的设计——上层的设备驱动构造 message，下层的 HOST 驱动执行它。
 ### 四者关系
+
 ```c
 spi_master（控制器）
 │
@@ -1556,44 +1387,27 @@ spi_master（控制器）
 
 ## 三、HOST 控制器驱动层（spi-imx.c 为代表）
 ### struct spi_imx_data — 控制器私有数据
+
 ```c
 struct spi_imx_data {
 struct spi_bitbang bitbang;             // bitbang 框架嵌入
-```
-
-```c
 /* 硬件资源 */
 void __iomem *base;                     // 寄存器基址（ioremap 结果）
 struct clk *clk_per;                    // 外设时钟
 struct clk *clk_ipg;                    // 接口时钟
 unsigned long spi_clk;                  // 输入时钟频率
-```
-
-```c
 /* 芯片类型 */
 struct spi_imx_devtype_data *devtype_data;  // 芯片特定回调节点
-```
-
-```c
 /* 函数指针 */
 void (*tx)(struct spi_imx_data *);      // 写 TXFIFO 函数（u8/u16/u32）
 void (*rx)(struct spi_imx_data *);      // 读 RXFIFO 函数
-```
-
-```c
 /* PIO 传输状态 */
 const void *tx_buf;                     // 当前发送位置
 void *rx_buf;                           // 当前接收位置
 unsigned int count;                     // 剩余字节数
 unsigned int txfifo;                    // 软件 FIFO 计数
-```
-
-```c
 /* 同步 */
 struct completion xfer_done;            // 传输完成通知
-```
-
-```c
 /* DMA */
 unsigned int wml;                       // FIFO 水线
 struct completion dma_tx_completion;    // DMA TX 完成
@@ -1603,6 +1417,7 @@ unsigned int usedma;                    // 当前传输是否走 DMA
 ```
 
 ### struct spi_imx_devtype_data — 芯片差异抽象
+
 ```c
 struct spi_imx_devtype_data {
 void (*intctrl)(struct spi_imx_data *, int);        // 中断控制
@@ -1616,6 +1431,7 @@ enum spi_imx_devtype devtype;                       // 芯片枚举
 
 关键：通过函数指针表，同一个 spi-imx.c 支持 IMX1 ~ IMX6UL 五款芯片。probe 时根据 DT compatible 选择对应实例。
 ### struct spi_bitbang — bitbang 框架
+
 ```c
 struct spi_bitbang {
 struct spi_master *master;                      // 关联的 master
@@ -1629,6 +1445,7 @@ struct spi_transfer *);
 
 关键：spi_imx 通过 bitbang 框架接入核心层。bitbang 框架替它实现了 transfer_one_message（循环遍历 transfer + 拉 CS + 调 txrx_bufs + 释放 CS）。
 ### struct spi_imx_config — 单次传输配置
+
 ```c
 struct spi_imx_config {
 unsigned int speed_hz;  // 传输速率
@@ -1638,15 +1455,13 @@ unsigned int bpw;       // 位宽
 
 ## 四、设备驱动层（spidev.c / client drivers 为代表）
 ### struct spidev_data — spidev 私有数据
+
 ```c
 struct spidev_data {
 dev_t           devt;               // 字符设备号
 spinlock_t      spi_lock;           // 保护 spi 指针
 struct spi_device *spi;             // 关联的 SPI 设备
 struct list_head device_entry;      // 全局设备链表
-```
-
-```c
 struct mutex    buf_lock;           // 保护 bounce buffer
 unsigned        users;              // 打开次数
 u8              *tx_buffer;         // bounce buffer TX
@@ -1656,6 +1471,7 @@ u32             speed_hz;           // 当前速率
 ```
 
 ### struct spi_ioc_transfer — 用户态传输描述
+
 ```c
 struct spi_ioc_transfer {
 __u64       tx_buf;         // 用户态 TX buffer 地址
@@ -1671,6 +1487,7 @@ __u32       pad;
 
 关键：这是用户态和内核态之间传输 SPI 数据的标准接口。spidev.c 通过 SPI_IOC_MESSAGE ioctl 将其转换为内核的 spi_transfer。
 ### struct file_operations — 字符设备操作表
+
 ```c
 static const struct file_operations spidev_fops = {
 .owner =        THIS_MODULE,
@@ -1689,13 +1506,11 @@ static const struct file_operations spidev_fops = {
 ### struct spi_ioc_transfer — SPIDEV 的 ioctl 参数
 同上，这是用户态直接用到的主要数据结构。
 ### 接口层相关头文件
+
 ```c
 用户态可见：
 linux/spi/spidev.h    — SPI_IOC_MESSAGE, SPI_IOC_RD_*, SPI_IOC_WR_*
 linux/spi/spi.h       — spi_mode_t, SPI_MODE_0/1/2/3
-```
-
-```c
 内核态专用：
 linux/spi/spi.h       — spi_message, spi_transfer, spi_sync, spi_async
 linux/spi/spi_bitbang.h — spi_bitbang 框架
