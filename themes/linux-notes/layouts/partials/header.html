@@ -1,10 +1,10 @@
 <header class="site-header">
-  <div class="site-title"><a href="{{ "/" | absURL }}">{{ .Site.Title }}</a></div>
+  <div class="site-title"><a href="{{ .Site.BaseURL }}">{{ .Site.Title }}</a></div>
   {{ with .Site.Params.subtitle }}<div class="site-desc">{{ . }}</div>{{ end }}
   <nav class="site-nav">
-    <a href="{{ "/" | absURL }}" {{ if .IsHome }}class="current"{{ end }}>首页</a>
-    <a href="{{ "/posts/" | absURL }}" {{ if eq .Section "posts" }}class="current"{{ end }}>文章</a>
-    <a href="{{ "/tags/" | absURL }}" {{ if eq .Section "tags" }}class="current"{{ end }}>标签</a>
-    <a href="{{ "/about/" | absURL }}" {{ if eq .RelPermalink "/about/" }}class="current"{{ end }}>关于</a>
+    <a href="{{ .Site.BaseURL }}" {{ if .IsHome }}class="current"{{ end }}>首页</a>
+    <a href="{{ .Site.BaseURL }}posts/" {{ if eq .Section "posts" }}class="current"{{ end }}>文章</a>
+    <a href="{{ .Site.BaseURL }}tags/" {{ if eq .Section "tags" }}class="current"{{ end }}>标签</a>
+    <a href="{{ .Site.BaseURL }}about/" {{ if eq .RelPermalink "/about/" }}class="current"{{ end }}>关于</a>
   </nav>
 </header>

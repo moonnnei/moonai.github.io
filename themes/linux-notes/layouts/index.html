@@ -14,7 +14,7 @@
       {{ if .Params.summary }}<div class="post-summary">{{ .Params.summary }}</div>{{ end }}
       {{ with .Params.tags }}
       <div class="post-tags">
-        {{ range . }}<a href="{{ "/tags/" | absURL }}{{ . | urlize }}" class="tag">#{{ . }}</a>{{ end }}
+        {{ range . }}<a href="{{ $.Site.BaseURL }}tags/{{ . | urlize }}" class="tag">#{{ . }}</a>{{ end }}
       </div>
       {{ end }}
     </li>
