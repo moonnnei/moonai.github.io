@@ -15,7 +15,7 @@ disableKinds = ["RSS", "sitemap"]
     codeFences = true
     lineNos = true
     lineNumbersInTable = true
-    style = "github"
+    style = "atom-one-dark"
 
   [markup.goldmark]
     [markup.goldmark.renderer]
