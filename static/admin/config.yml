@@ -1,12 +1,10 @@
-backend:
+﻿backend:
   name: github
   repo: moonnnei/moonai.github.io
   branch: main
-  base_url: https://api.github.com
+  auth_type: pkce
+  app_id: "Ov23liOpgIWtdNGc6aIu"
 
-auth_scope: repo
-
-# 图片上传位置
 media_folder: "static/images/uploads"
 public_folder: "/moonai.github.io/images/uploads"
 
@@ -19,10 +17,8 @@ collections:
     slug: "{{slug}}"
     summary: "{{title}} — {{year}}/{{month}}/{{day}}"
     preview_path: "posts/{{year}}/{{month}}/{{slug}}"
-
     editor:
       preview: true
-
     fields:
       - { label: "标题", name: "title", widget: "string" }
       - { label: "发布日期", name: "date", widget: "datetime", format: "YYYY-MM-DD" }
@@ -31,9 +27,6 @@ collections:
       - label: "正文"
         name: "body"
         widget: "markdown"
-        editor_components:
-          - image
-          - code-block
         modes:
           - "rich_text"
           - "raw"
