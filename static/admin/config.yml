@@ -1,0 +1,49 @@
+backend:
+  name: github
+  repo: moonnnei/moonai.github.io
+  branch: main
+  base_url: https://api.github.com
+
+auth_scope: repo
+
+# 图片上传位置
+media_folder: "static/images/uploads"
+public_folder: "/moonai.github.io/images/uploads"
+
+collections:
+  - name: "posts"
+    label: "文章"
+    label_singular: "文章"
+    folder: "content/posts"
+    create: true
+    slug: "{{slug}}"
+    summary: "{{title}} — {{year}}/{{month}}/{{day}}"
+    preview_path: "posts/{{year}}/{{month}}/{{slug}}"
+
+    editor:
+      preview: true
+
+    fields:
+      - { label: "标题", name: "title", widget: "string" }
+      - { label: "发布日期", name: "date", widget: "datetime", format: "YYYY-MM-DD" }
+      - { label: "标签", name: "tags", widget: "list", required: false }
+      - { label: "摘要", name: "summary", widget: "text", required: false }
+      - label: "正文"
+        name: "body"
+        widget: "markdown"
+        editor_components:
+          - image
+          - code-block
+        modes:
+          - "rich_text"
+          - "raw"
+
+  - name: "pages"
+    label: "页面"
+    folder: "content"
+    create: true
+    slug: "{{slug}}"
+    fields:
+      - { label: "标题", name: "title", widget: "string" }
+      - { label: "发布日期", name: "date", widget: "datetime", format: "YYYY-MM-DD" }
+      - { label: "正文", name: "body", widget: "markdown" }
