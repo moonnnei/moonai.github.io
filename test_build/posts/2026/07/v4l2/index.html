@@ -1,0 +1,242 @@
+<!doctype html><html lang=zh><head><meta charset=UTF-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=description content="一个关于 Linux 系统学习、命令行技巧、运维实践的博客。从基础到进阶，持续记录和分享。"><title>V4L2 驱动框架深度分析 — Linux 学习笔记</title><link rel=stylesheet href=/moonai.github.io/css/main.css></head><body><div class=wrapper><header class=site-header><div class=site-title><a href=https://moonnnei.github.io/moonai.github.io/>Linux 学习笔记</a></div><div class=site-desc>记录 Linux 学习路上的点滴</div><nav class=site-nav><a href=https://moonnnei.github.io/moonai.github.io/>首页</a>
+<a href=https://moonnnei.github.io/moonai.github.io/posts/ class=current>文章</a>
+<a href=https://moonnnei.github.io/moonai.github.io/tags/>标签</a>
+<a href=https://moonnnei.github.io/moonai.github.io/about/>关于</a></nav></header><main><article class=post-single><header class=post-header><h1 class=post-title>V4L2 驱动框架深度分析</h1><div class=post-meta><time datetime=2026-07-13>2026-07-13</time>
+·<div class=post-tags style=display:inline-flex><a href=https://moonnnei.github.io/moonai.github.io/tags/linux%E5%86%85%E6%A0%B8 class=tag>#Linux内核</a><a href=https://moonnnei.github.io/moonai.github.io/tags/v4l2 class=tag>#V4L2</a><a href=https://moonnnei.github.io/moonai.github.io/tags/%E9%A9%B1%E5%8A%A8%E5%BC%80%E5%8F%91 class=tag>#驱动开发</a><a href=https://moonnnei.github.io/moonai.github.io/tags/%E8%A7%86%E9%A2%91%E8%AE%BE%E5%A4%87 class=tag>#视频设备</a></div></div></header><div class=post-content><h1 id=v4l2>v4l2</h1><div>https://blog.csdn.net/u013904227/article/details/80718831</div>https://blog.csdn.net/qq_42732669/article/details/139580399</div><h1 id=概述>概述</h1><p>由于硬件的复杂性，同时 v4l2 驱动要支持 IC 模块进行音视频的混合编解码操作，v4l2 的驱动变得异常复杂。</p><p>老旧的 v4l2 框架仅限于通过 video_device 结构体创建 v4l 设备节点和 video_buf 来处理视频数据。</p><p>这意味着所有的驱动都必须对设备实例进行设置并将其映射到子设备上。有些时候这些操作步骤十分复杂，很难正确完成，并且有些驱动程序从来没有正确的按照这些操作步骤编写。由于缺少一个框架，有很多通用代码就没有办法被重构，从而导致这部分代码被重复编写，效率比较低下。</p><p>所以该框架抽象构建了所以驱动都需要的代码并封装为一个个模块，简化了设备驱动通用代码的重构。</p><p>V4L2 只做三件事：</p><p><strong>1. 管理设备节点</strong>
+提供一个 <code>/dev/videoX</code>，让应用能 open/close/ioctl。这背后的工作是次设备号分配、cdev 注册、sysfs 属性。</p><p><strong>2. 标准化控制接口</strong>
+定义了一百多个 VIDIOC_* 命令，让应用用同一套 API 控制不同硬件。不管摄像头是 USB 的、MIPI 的、还是并口的，调亮度都用同一个 <code>VIDIOC_S_CTRL</code>​。差异被隔离在驱动层的 <code>vidioc_*</code> 回调里。</p><p><strong>3. 搬运数据</strong><br>提供 videobuf2 框架管理 DMA 缓冲区的生命周期：分配、排队、完成通知、内存映射。它只管把数据从硬件搬到内存、再从内存交给应用。数据到了应用手里之后怎么处理，V4L2 不管。</p><h1 id=框架>框架</h1><p>从应用的角度来看如何使用v4l2</p><p><img src=v2-7b72825dbb76f120f821a9ab0c7905da_r-20260710185034-lap20xj.jpg alt=v2-7b72825dbb76f120f821a9ab0c7905da_r></p><p>先看正常的硬件拓扑结构，才能深入理解</p><p><img src=image-20260710184609-4pjbkn8.png alt=image></p><p>通常一个camera的模组如图所示，通常包括Lens、Sensor、CSI接口等，其中CSI接口用于视频数据的传输；</p><p>SoC的Mipi接口对接Camera，并通过I2C/SPI控制camera模组；</p><p>Camera模组中也可以包含ISP模块，用于对图像进行处理，有的SoC中也集成了ISP的IP，接收camera的raw数据后，进行图像处理；</p><p>对硬件设备进行抽象</p><p>以v4l2_device代表整个输入设备，以v4l2_subdev代表子模块，比如CSI，sensor。</p><p><img src=v2-69ea1f9d8bde110a0d34dcf13d5c68d3_r-20260710185916-2p3who7.jpg alt=v2-69ea1f9d8bde110a0d34dcf13d5c68d3_r></p><p>可以很容易的理解v4l2子系统的数据结构了</p><h1 id=数据结构>数据结构</h1><h2 id=struct-v4l2_device>struct v4l2_device</h2><p>该结构体是对整个输入设备的抽象，将各个子设备联系在一起，起到纽带的作用。通常会嵌入在其他结构体中提供v4l2框架功能，在实现子设备驱动中通常会嵌入驱动自己定义的结构体中。</p><h2 id=struct-v4l2_subdev>struct v4l2_subdev</h2><p>v4l2_subdev是对子设备的抽象，驱动自己定义的结构体放私有数据，该结构体中包含的struct v4l2_subdev_ops是一个完备的操作函数集，用于对接各种不同的子设备，比如video、audio、sensor等，同时还有一个核心的函数集struct v4l2_subdev_core_ops，提供更通用的功能。子设备驱动根据设备特点实现该函数集中的某些函数即可；</p><h2 id=struct-media_device>struct media_device</h2><p>一个 V4L2 device 下属可能有非常多同类型的子设备（两个或者多个 sensor、ISP 等），那么在设备运行的时候我怎么知道我的数据流需要用到哪一个类型的哪一个子设备呢。这个时候就轮到 media_device 出手了，它为这一坨的子设备建立一条虚拟的连线，建立起来一个运行时的 pipeline（管道），并且可以在运行时动态改变、管理接入的设备。</p><h2 id=struct-video_device>struct video_device</h2><p>video_device的作用是向vfs注册节点供用户层使用</p><pre tabindex=0><code class=language-填写video_device data-lang=填写video_device>video_device 注册后
+  → cdev_add 把 video_device-&gt;cdev 注册到 VFS
+    → 用户就能 open(&#34;/dev/video0&#34;)
+      → VFS 通过主设备号 81 找到 cdev
+        → cdev 的 ops 是 v4l2_fops
+          → v4l2_fops.open = v4l2_open
+            → 通过 video_devdata(file) 找到 video_device
+              → 再找到驱动的 ioctl_ops 和 vb2_queue
+</code></pre><p>用于向系统注册字符设备节点，以便用户空间可以进行交互，包括各类设置以及数据buffer的获取等，在该结构体中也能看到struct v4l2_ioctl_ops和struct vb2_queue结构体字段，这些与上文中的应用层代码编写息息相关；可以内嵌在其他结构体中，以便提供用户层交互的功能</p><h1 id=注册流程分析>注册流程分析</h1><p>以airspy.c为例</p><p>在probe函数中调用video_register_device进行注册</p><p><img src=image-20260711151919-b7lggbh.png alt=image></p><p>跳转到__video_register_device</p><p><img src=image-20260711152017-4bkiccr.png alt=image></p><p>在__video_register_device进行注册</p><p>注册字符驱动设备</p><p>‍</p><p><img src=image-20260711153057-ngd0sen.png alt=image></p><p>注册/sys下的class</p><p><img src=image-20260711153200-gyqhsob.png alt=image></p><p>‍</p><table><thead><tr><th>部分</th><th>给谁看</th><th>函数</th><th>效果</th></tr></thead><tbody><tr><td>字符设备</td><td><strong>用户层</strong></td><td><code>video_register_device</code></td><td><code>/dev/video0</code>出现，应用可以 open/ioctl</td></tr><tr><td>设备注册</td><td><strong>内核</strong></td><td><code>v4l2_device_register</code></td><td>关联到父设备，挂 subdev 链表，提供 ctrl_handler 继承</td></tr></tbody></table><p><img src=image-20260711155626-5e7ocvi.png alt=image></p><h2 id=函数表分析>函数表分析</h2><p>查看airspy结构体</p><pre tabindex=0><code>struct airspy {
+    struct video_device vdev;         // ← 里面藏了 fops + ioctl_ops
+    struct v4l2_device v4l2_dev;      // ← 里面藏了 ctrl_handler 指针
+    struct vb2_queue vb_queue;        // ← 里面藏了 ops + mem_ops
+    struct v4l2_ctrl_handler hdl;     // ← 里面藏了 ctrl_ops
+    ...
+};
+</code></pre><p>在probe函数中</p><p><img src=image-20260711162706-gjexrj3.png alt=image></p><p><img src=image-20260711162748-ftrq6zv.png alt=image></p><p>填充了airspy自定义的结构体的video_device，包括fops，ioctl_ops</p><pre tabindex=0><code class=language-ops填充 data-lang=ops填充>struct airspy {
+    vdev ───── video_device
+                ├── .fops       → &amp;airspy_fops (来自模板拷贝)
+                │     ├── .open    = v4l2_fh_open      ← 核心层
+                │     ├── .read    = vb2_fop_read       ← vb2 框架
+                │     ├── .mmap    = vb2_fop_mmap       ← vb2 框架
+                │     └── .unlocked_ioctl = video_ioctl2 ← 核心层
+                │
+                └── .ioctl_ops  → &amp;airspy_ioctl_ops (来自模板拷贝)
+                      ├── .vidioc_querycap      = airspy_querycap         ← 驱动
+                      ├── .vidioc_s_fmt_sdr_cap = airspy_s_fmt_sdr_cap    ← 驱动
+                      ├── .vidioc_qbuf          = vb2_ioctl_qbuf          ← vb2 框架
+                      └── .vidioc_streamon      = vb2_ioctl_streamon      ← vb2 框架
+
+    vb_queue ── vb2_queue
+                ├── .ops       → &amp;airspy_vb2_ops
+                │     ├── .queue_setup     = airspy_queue_setup     ← 驱动
+                │     ├── .buf_queue       = airspy_buf_queue       ← 驱动
+                │     ├── .start_streaming = airspy_start_streaming ← 驱动
+                │     └── .stop_streaming  = airspy_stop_streaming  ← 驱动
+                │
+                └── .mem_ops   → &amp;vb2_vmalloc_memops (框架提供，驱动选)
+
+    hdl ─────── v4l2_ctrl_handler
+                └── .ops      → &amp;airspy_ctrl_ops
+                      └── .s_ctrl = airspy_s_ctrl ← 驱动
+}
+</code></pre><p>注册的总体概览如下</p><p><img src=image-20260711164326-1zhhryg.png alt=image></p><p>驱动结构体中内嵌 <code>struct video_device</code>​ 和 <code>struct vb2_queue</code>​，驱动实现 <code>ioctl_ops</code>​、<code>vb2_ops</code>​、<code>ctrl_ops</code>​ 这些硬件相关的回调，通过模板填充 <code>vdev.fops</code>​（指向框架提供的函数），最终通过 <code>video_register_device</code> 注册。</p><p><code>__video_register_device</code>​ 内部通过 <code>cdev_add</code>​ 注册字符设备（固定使用核心层的 <code>v4l2_fops</code>​），通过 <code>device_register</code>​ 在 <code>/sys/class/video4linux/</code>​ 下创建设备节点。用户空间的 open/read/write/ioctl 先进入 <code>v4l2_fops</code>​，经过核心层处理后，最终路由到驱动注册的 <code>ioctl_ops</code>​ 和 <code>vb2_ops</code> 回调。</p><p>完成注册后，应用层可以通过文件描述符来访问设备节点，通过ioctl接口完成</p><h2 id=ioctl的调用流程分析>ioctl的调用流程分析</h2><p>用户层使用ioctl(fd,VIDIOC_xxx)命令，会调用v4l2_ioctl</p><p><img src=image-20260711194549-aqocpny.png alt=image></p><p>在函数内部，先检测注册的fops是否提供了<code>unlocked_ioctl</code> 函数</p><p><img src=image-20260711194723-s8cp4vu.png alt=image></p><p>早年 Linux 的 <code>file_operations</code>​ 里只有 <code>.ioctl</code>​，内核调用它之前会持有 ​<strong>BKL（Big Kernel Lock）</strong> ——一把全局大锁，性能极差。</p><p>后来内核引入了 <code>.unlocked_ioctl</code>​，意思是：​<strong>VFS 层不再帮你持有任何锁，你自己管自己的并发</strong>。VFS 侧的语义就是"没有锁"。</p><p>所以 <code>.unlocked_ioctl</code> 这个名字是 VFS 层的 contract，不是 V4L2 内部的状态。</p><p>如果有<code>unlocked_ioctl</code>，VFS层会调用这个</p><p><img src=image-20260711200718-d3jai8a.png alt=image></p><p>调用这个函数</p><p><img src=image-20260711201031-i3cd7i0.png alt=image></p><p><img src=image-20260711201158-ohx7i4t.png alt=image></p><p>涉及到两个函数video_usercopy和__video_do_ioctl</p><h3 id=先说video_usercopy>先说video_usercopy</h3><p>它干的活很纯粹，就是 ​ <strong>&ldquo;把数据从用户态搬到内核态，调完再搬回去&rdquo;</strong> ：</p><p><strong>进入时做的事：</strong></p><p>1.判断命令是否有参数。如果没有数据方向的（<code>_IOC_NONE</code>），跳过复制。</p><p>2.如果有参数：</p><pre><code>参数 ≤ 128 字节 → 用栈上的 `sbuf[128]`，避免分配
+
+参数 \&gt; 128 字节 → `kmalloc`​ 动态分配 `mbuf`
+</code></pre><p>3.如果是写方向（<code>_IOC_WRITE</code>​）：<code>copy_from_user(parg, arg, n)</code> — 从用户空间拷进来</p><pre><code>这里有个优化：如果 cmd 在已知表中且标记了 `INFO_FL_CLEAR_MASK`，只复制前几个字段，后面清零
+</code></pre><p>4.如果是只读方向：直接 <code>memset</code> 清零内核缓冲区，留给驱动去填充</p><p>5.处理数组参数（如 <code>VIDIOC_ENUM_FMT</code>​ 里嵌套的数组指针）：<code>check_array_args</code> → 再拷一次数组</p><p><strong>中间做的事：</strong></p><pre tabindex=0><code>err = func(file, cmd, parg);   // 调用 __video_do_ioctl
+</code></pre><p><strong>返回时做的事：</strong></p><p>1.数组参数写回用户空间：<code>copy_to_user(user_ptr, mbuf, array_size)</code></p><p>2.普通参数写回用户空间：</p><pre tabindex=0><code>if (_IOC_DIR(cmd) &amp; _IOC_READ)
+    copy_to_user((void __user *)arg, parg, _IOC_SIZE(cmd));
+</code></pre><p>3.<code>kfree(mbuf)</code> 收尾</p><p><strong>一句话：<strong>​</strong>​<code>video_usercopy</code>​</strong>​ <strong>不关心 ioctl 是什么含义，它只负责把参数安全地跨过内核/用户边界。</strong></p><h3 id=再看__video_do_ioctl>再看__video_do_ioctl</h3><p><img src=image-20260711202432-yd1f24k.png alt=image></p><p>根据次设备号拿到注册的ioctl_ops</p><p><img src=image-20260711202738-j7zznm9.png alt=image></p><p>查命令表</p><p><img src=image-20260711202901-6l6r8o6.png alt=image></p><p>命令表记录了IOCTL命令和对应的跳转函数</p><p>最后就是校验 + 分发</p><p>根据 <code>info->flags</code>，命令分为两种</p><table><thead><tr><th>标志</th><th>含义</th><th>分发方式</th></tr></thead><tbody><tr><td><code>INFO_FL_FUNC</code></td><td>有专用处理函数</td><td>直接调<code>info-&amp;gt;u.func(file, fh, parg)</code></td></tr><tr><td><code>INFO_FL_STD</code></td><td>标准 ioctl</td><td>查驱动<code>ioctl_ops</code>里对应的回调</td></tr></tbody></table><p>比如 <code>VIDIOC_QBUF</code>​ 是 <code>INFO_FL_FUNC</code>​，直接调 <code>v4l2_qbuf</code>​（内核自己实现了标准流程）。而 <code>VIDIOC_S_FMT</code>​ 走 <code>INFO_FL_STD</code>​，最后调 <code>ops->vidioc_s_fmt</code>（驱动自己的实现）。</p><p>‍</p><p><img src=image-20260711205310-hrf77vc.png alt=image></p><p><img src=image-20260711221332-4abpyjc.png alt=image></p><h1 id=数据流videobuf2>数据流videobuf2</h1><p>videobuf2用于连接V4L2驱动层与用户空间层，提供数据交流的通道，它可以分配并管理视频帧数据。videobuf层实现了很多的ioctl函数，包括buffer的分配、入队、出队和数据流控制。</p><h2 id=数据类型>数据类型</h2><p>不是所有的视频设备都使用同一种类型的 buffer，事实上，buffer 类型可以概括为三种：</p><p>buffer 在虚拟地址以及物理地址上面都是分散的。几乎所有的用户空间 buffer 都是这种类型，在内核空间中，这种类型的 buffer 并不总是能够满足需要，因为这要求硬件可以进行分散的 DMA 操作。<br>物理地址分散，虚拟地址连续。也就是通过 vmalloc 分配的 buffer，换句话说很难使用 DMA 来操作这些buffer。<br>物理地址连续（虚拟地址不关心）。在分段式系统上面分配这种类型的 buffer 是不可靠的（分段式-也即页式系统上面有可能在长时间运行之后内存出现大量碎片，从而导致连续的内存空间很难获得，所以说不可靠），但是简单 DMA 控制器只能够适用于这种类型的 buffer。也有分段式的 DMA 操作，不过那种需要用到 IOMMU 来实现。<br>这三种类型的 buffer 对应的相关操作函数分别对应于 videobuf2-dma-sg.c,videobuf2-vmalloc.c,videobuf2-dma-contig.c。</p><h2 id=buffer的内核实现>buffer的内核实现</h2><p><code>APP操作buffer的示意图如下：</code></p><p><img src=image-20260712171502-zir9hed.png alt=image></p><h3 id=videobuffer2缓冲区结构体><code>videobuffer2缓冲区结构体</code></h3><p>驱动程序初始化时，就构造了vb2_queue，这是"buffer的队列"，一开始里面没有"buffer"</p><p>APP调用ioctl VIDIOC_REQBUFS向驱动申请N个buffer</p><p>驱动程序分配n(n&lt;=N)个vb2_buffer结构体，然后</p><p>对于普通摄像头，还分配一个vb2_plane结构体、vb2_vmalloc_buf结构体，最后分配存数据的buffer</p><p>对于多平面摄像头，给每个vb2_buffer分配多个"vb2_plane结构体、vb2_vmalloc_buf结构体、存数据的buffer"</p><h4 id=vb2_queue>vb2_queue</h4><p>用于管理整个buffer系统</p><div class=highlight><div style=background-color:#f7f7f7;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><table style=border-spacing:0;padding:0;margin:0;border:0><tr><td style=vertical-align:top;padding:0;margin:0;border:0><pre tabindex=0 style=background-color:#f7f7f7;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">25
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">26
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">27
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">28
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">29
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">30
+</span></code></pre></td><td style=vertical-align:top;padding:0;margin:0;border:0;width:100%><pre tabindex=0 style=background-color:#f7f7f7;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-c data-lang=c><span style=display:flex><span><span style=color:#cf222e>struct</span> vb2_queue <span style=color:#1f2328>{</span>
+</span></span><span style=display:flex><span>    <span style=color:#57606a>/* ① 配置（驱动填充，只读） */</span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>            type<span style=color:#1f2328>;</span>           <span style=color:#57606a>// V4L2_BUF_TYPE_VIDEO_CAPTURE 等
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>            io_modes<span style=color:#1f2328>;</span>       <span style=color:#57606a>// 支持的 I/O 方式：VB2_MMAP | VB2_USERPTR | VB2_READ
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>struct</span> device           <span style=color:#0550ae>*</span>dev<span style=color:#1f2328>;</span>           <span style=color:#57606a>// DMA 设备
+</span></span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>const</span> <span style=color:#cf222e>struct</span> vb2_ops    <span style=color:#0550ae>*</span>ops<span style=color:#1f2328>;</span>           <span style=color:#57606a>// → 驱动回调
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>const</span> <span style=color:#cf222e>struct</span> vb2_mem_ops <span style=color:#0550ae>*</span>mem_ops<span style=color:#1f2328>;</span>      <span style=color:#57606a>// → 内存后端操作
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>void</span>                    <span style=color:#0550ae>*</span>drv_priv<span style=color:#1f2328>;</span>      <span style=color:#57606a>// → 驱动私有数据 (airspy 里设成 s)
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>            buf_struct_size<span style=color:#1f2328>;</span> <span style=color:#57606a>// 驱动自定义 buffer 结构体大小
+</span></span></span><span style=display:flex><span>    u32                     min_buffers_needed<span style=color:#1f2328>;</span> <span style=color:#57606a>// 至少需要多少 buffer 才启动
+</span></span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#57606a>/* ② 内部状态（应用不可见） */</span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>struct</span> vb2_buffer       <span style=color:#0550ae>*</span>bufs<span style=color:#1f2328>[</span>VB2_MAX_FRAME<span style=color:#1f2328>];</span> <span style=color:#57606a>// ★ buffer 指针数组，按 index 索引
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>            num_buffers<span style=color:#1f2328>;</span>    <span style=color:#57606a>// 实际分配了多少个 buffer
+</span></span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>struct</span> list_head        queued_list<span style=color:#1f2328>;</span>    <span style=color:#57606a>// 已入队但还没交给驱动的 buffer
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>            queued_count<span style=color:#1f2328>;</span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>atomic_t</span>                owned_by_drv_count<span style=color:#1f2328>;</span> <span style=color:#57606a>// 当前在驱动手里的 buffer 数
+</span></span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>struct</span> list_head        done_list<span style=color:#1f2328>;</span>      <span style=color:#57606a>// ★ 硬件完成、等应用 DQBUF 的 buffer
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>spinlock_t</span>              done_lock<span style=color:#1f2328>;</span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>wait_queue_head_t</span>       done_wq<span style=color:#1f2328>;</span>        <span style=color:#57606a>// ★ DQBUF 阻塞等待的等待队列
+</span></span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>            <span style=color:#900;font-weight:700>streaming</span><span style=color:#1f2328>:</span><span style=color:#0550ae>1</span><span style=color:#1f2328>;</span>           <span style=color:#57606a>// 是否 STREAMON 状态
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>            <span style=color:#900;font-weight:700>start_streaming_called</span><span style=color:#1f2328>:</span><span style=color:#0550ae>1</span><span style=color:#1f2328>;</span> <span style=color:#57606a>// start_streaming 已被调用
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>            <span style=color:#900;font-weight:700>error</span><span style=color:#1f2328>:</span><span style=color:#0550ae>1</span><span style=color:#1f2328>;</span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>            <span style=color:#900;font-weight:700>waiting_for_buffers</span><span style=color:#1f2328>:</span><span style=color:#0550ae>1</span><span style=color:#1f2328>;</span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>            <span style=color:#900;font-weight:700>last_buffer_dequeued</span><span style=color:#1f2328>:</span><span style=color:#0550ae>1</span><span style=color:#1f2328>;</span>
+</span></span><span style=display:flex><span><span style=color:#1f2328>};</span>
+</span></span></code></pre></td></tr></table></div></div><p>在airspy.c中可以看到驱动填充的过程</p><p><img src=image-20260712184608-8vjfr2m.png alt=image></p><p>核心设计思想：<strong>​<code>bufs[]</code>​</strong> ​ <strong>数组做存储，三个链表做状态管理</strong>。</p><h4 id=vb2_buffer>vb2_buffer</h4><p>将vb2_buffer看做对buffer的描述，而不是buffer本身</p><div class=highlight><div style=background-color:#f7f7f7;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><table style=border-spacing:0;padding:0;margin:0;border:0><tr><td style=vertical-align:top;padding:0;margin:0;border:0><pre tabindex=0 style=background-color:#f7f7f7;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">15
+</span></code></pre></td><td style=vertical-align:top;padding:0;margin:0;border:0;width:100%><pre tabindex=0 style=background-color:#f7f7f7;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-c data-lang=c><span style=display:flex><span><span style=color:#cf222e>struct</span> vb2_buffer <span style=color:#1f2328>{</span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>struct</span> vb2_queue        <span style=color:#0550ae>*</span>vb2_queue<span style=color:#1f2328>;</span>     <span style=color:#57606a>// 所属 queue
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>            index<span style=color:#1f2328>;</span>          <span style=color:#57606a>// 在 bufs[] 中的索引
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>            type<span style=color:#1f2328>;</span>           <span style=color:#57606a>// buffer 类型
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>            memory<span style=color:#1f2328>;</span>         <span style=color:#57606a>// VB2_MEMORY_MMAP/USERPTR/DMABUF
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>            num_planes<span style=color:#1f2328>;</span>     <span style=color:#57606a>// plane 数量（YUV 可能有 3 个 plane）
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>struct</span> vb2_plane        planes<span style=color:#1f2328>[</span>VB2_MAX_PLANES<span style=color:#1f2328>];</span> <span style=color:#57606a>// ★ 每个 plane 的内存信息
+</span></span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    <span style=color:#57606a>/* 内部使用 */</span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>enum</span> vb2_buffer_state   state<span style=color:#1f2328>;</span>          <span style=color:#57606a>// ★ 当前状态（状态机核心）
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>struct</span> list_head        queued_entry<span style=color:#1f2328>;</span>   <span style=color:#57606a>// 挂在 queued_list 上的链表节点
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>struct</span> list_head        done_entry<span style=color:#1f2328>;</span>     <span style=color:#57606a>// 挂在 done_list 上的链表节点
+</span></span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    u64                     timestamp<span style=color:#1f2328>;</span>      <span style=color:#57606a>// 时间戳
+</span></span></span><span style=display:flex><span><span style=color:#1f2328>};</span>
+</span></span></code></pre></td></tr></table></div></div><p><strong>每个 buffer 通过</strong> <strong>​<code>queued_entry</code>​</strong>​ <strong>和</strong> <strong>​<code>done_entry</code>​</strong>​ <strong>两个链表节点，可以在不同队列间移动</strong>，不需要拷贝数据。</p><h5 id=补充状态机>补充：状态机</h5><p>状态机就是把一件事分成几个过程，每个过程对应一个状态，状态与状态之间的转换通过事件来触发</p><p>一个状态机可以分为<strong>状态，事件，动作，迁移条件</strong></p><p><strong>状态</strong>：一个系统在某一时刻所存在的稳定的工作情况，系统在整个工作周期中可能有多个状态。例如一部电动机共有正转、反转、停转这 3 种状态。</p><p><strong>事件</strong>：发生事件使系统状态改变</p><p><strong>动作</strong>：系统状态改变，会触发额外动作</p><p><strong>迁移条件</strong>：状态的迁移需要状态和事件匹配</p><p><strong>优点</strong>：</p><p><strong>提高CPU 使用效率</strong><br>话说我只要见到满篇都是delay_ms()的程序就会头疼，因为这些软件延时是对CPU资源的巨大浪费，宝贵的CPU机时都浪费在了NOP指令上。那种为了等待一个管脚电平跳变或者一个串口数据而岿然不动的程序也让我非常纠结，如果事件一直不发生，你要等到世界末日么？</p><p>把程序状态机化，这种情况就会明显改观，程序只需要用全局变量 记录下工作状态，就可以转头去干别的工作了，当然忙完那些活儿之后要再看看工作状态有没有变化。只要目标事件(定时未到、电平没跳变、串口数据没收完)还没发生，工作状态就不会改变，程序就一直重复着“查询—做任务—查询—做任务”这样的循环，这样CPU就闲不下来了。</p><p>这种处理方法的实质就是在程序等待事件的过程中间隔性地插入一些有意义的工作，好让CPU不是一直无谓地等待。<br><strong>逻辑完备性</strong><br>对于一个逻辑完备的反应式系统，不管什么样的事件组合，系统都能正确处理事件，而且系统自身的工作状态也一直处在可知可控的状态中。反过来，如果一个系统的逻辑功能不完备，在某些特定事件组合的驱动下，系统就会进入一个不可知不可控的状态，与设计者的意图相悖。使用状态机编程可以使程序的逻辑更加完善，从而减少BUG。</p><p><strong>程序结构清晰</strong><br>使用状态机编程可以使程序的结构更加清晰。</p><p>程序员最痛苦的事儿莫过于读别人写的代码。如果代码不是很规范，而且手里还没有流程图，读代码会让人晕了又晕，只有顺着程序一遍又一遍的看，很多遍之后才能隐约地明白程序大体的工作过程。有流程图会好一点，但是如果程序比较大，流程图也不会画得多详细，很多细节上的过程还是要从代码中理解。</p><p>相比之下，用状态机写的程序要好很多，拿一张标准的UML状态转换图，再配上一些简明的文字说明，程序中的各个要素一览无余。程序中有哪些状态，会发生哪些事件，状态机如何响应，响应之后跳转到哪个状态，这些都十分明朗，甚至许多动作细节都能从状态转换图中找到。可以毫不夸张的说，有了UML状态转换图，程序流程图写都不用写。</p><p>‍</p><h4 id=vb2_plane>vb2_plane</h4><div class=highlight><div style=background-color:#f7f7f7;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><table style=border-spacing:0;padding:0;margin:0;border:0><tr><td style=vertical-align:top;padding:0;margin:0;border:0><pre tabindex=0 style=background-color:#f7f7f7;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">14
+</span></code></pre></td><td style=vertical-align:top;padding:0;margin:0;border:0;width:100%><pre tabindex=0 style=background-color:#f7f7f7;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-c data-lang=c><span style=display:flex><span><span style=color:#cf222e>struct</span> vb2_plane <span style=color:#1f2328>{</span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>void</span>            <span style=color:#0550ae>*</span>mem_priv<span style=color:#1f2328>;</span>          <span style=color:#57606a>// 内存后端的私有数据（比如 vmalloc 的 page 指针）
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>struct</span> dma_buf  <span style=color:#0550ae>*</span>dbuf<span style=color:#1f2328>;</span>             <span style=color:#57606a>// DMABUF 共享
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>    dbuf_mapped<span style=color:#1f2328>;</span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>    bytesused<span style=color:#1f2328>;</span>          <span style=color:#57606a>// ★ 实际数据长度（驱动在完成时设置）
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>    length<span style=color:#1f2328>;</span>             <span style=color:#57606a>// 分配的 buffer 大小
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>    min_length<span style=color:#1f2328>;</span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>union</span> <span style=color:#1f2328>{</span>
+</span></span><span style=display:flex><span>        <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>    offset<span style=color:#1f2328>;</span>        <span style=color:#57606a>// MMAP 模式：mmap offset
+</span></span></span><span style=display:flex><span>        <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>long</span>   userptr<span style=color:#1f2328>;</span>       <span style=color:#57606a>// USERPTR 模式：用户空间地址
+</span></span></span><span style=display:flex><span>        <span style=color:#cf222e>int</span>             fd<span style=color:#1f2328>;</span>            <span style=color:#57606a>// DMABUF 模式：文件描述符
+</span></span></span><span style=display:flex><span>    <span style=color:#1f2328>}</span> m<span style=color:#1f2328>;</span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>unsigned</span> <span style=color:#cf222e>int</span>    data_offset<span style=color:#1f2328>;</span>       <span style=color:#57606a>// 数据在 plane 中的偏移（比如有头部时）
+</span></span></span><span style=display:flex><span><span style=color:#1f2328>};</span>
+</span></span></code></pre></td></tr></table></div></div><p><code>struct vb2_plane</code>​ 是<strong>描述一块内存的元信息</strong>，它不包含数据本身</p><p><strong>真实的数据存在</strong> <strong>​<code>mem_priv</code>​</strong>​ <strong>所指的那块内存里</strong>，而不在 <code>vb2_plane</code> 结构体本身。</p><p><img src=image-20260712172746-kiblg9e.png alt=image></p><p>驱动程序初始化时，就构造了vb2_queue，这是"buffer的队列"，一开始里面没有"buffer"</p><p>APP调用ioctl VIDIOC_REQBUFS向驱动申请N个buffer</p><p>驱动程序分配n(n&lt;=N)个vb2_buffer结构体，然后</p><pre><code>对于普通摄像头，还分配一个vb2_plane结构体、vb2_vmalloc_buf结构体，最后分配存数据的buffer
+
+对于多平面摄像头，给每个vb2_buffer分配多个&quot;vb2_plane结构体、vb2_vmalloc_buf结构体、存数据的buffer&quot;
+</code></pre><p>‍</p><h4 id=vb2_v4l2_buffer>vb2_v4l2_buffer</h4><div class=highlight><div style=background-color:#f7f7f7;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><table style=border-spacing:0;padding:0;margin:0;border:0><tr><td style=vertical-align:top;padding:0;margin:0;border:0><pre tabindex=0 style=background-color:#f7f7f7;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:.4em;padding:0 .4em;color:#7f7f7f">8
+</span></code></pre></td><td style=vertical-align:top;padding:0;margin:0;border:0;width:100%><pre tabindex=0 style=background-color:#f7f7f7;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none><code class=language-c data-lang=c><span style=display:flex><span><span style=color:#cf222e>struct</span> vb2_v4l2_buffer <span style=color:#1f2328>{</span>
+</span></span><span style=display:flex><span>    <span style=color:#cf222e>struct</span> vb2_buffer   vb2_buf<span style=color:#1f2328>;</span>        <span style=color:#57606a>// ★ 内嵌核心 buffer
+</span></span></span><span style=display:flex><span>
+</span></span><span style=display:flex><span>    __u32               flags<span style=color:#1f2328>;</span>          <span style=color:#57606a>// V4L2_BUF_FLAG_*
+</span></span></span><span style=display:flex><span>    __u32               field<span style=color:#1f2328>;</span>          <span style=color:#57606a>// 逐行/隔行扫描
+</span></span></span><span style=display:flex><span>    <span style=color:#cf222e>struct</span> v4l2_timecode timecode<span style=color:#1f2328>;</span>      <span style=color:#57606a>// 时间码
+</span></span></span><span style=display:flex><span>    __u32               sequence<span style=color:#1f2328>;</span>       <span style=color:#57606a>// ★ 帧序号（airspy 里 s-&gt;sequence++）
+</span></span></span><span style=display:flex><span><span style=color:#1f2328>};</span>
+</span></span></code></pre></td></tr></table></div></div><p>这是vb2层的顶层封装</p><pre tabindex=0><code>用户空间 (userspace)
+    struct v4l2_buffer           ← UAPI，ioctl 参数的定义
+        ├── index
+        ├── type
+        ├── bytesused
+        ├── flags
+        ├── field
+        ├── timestamp
+        ├── memory
+        ├── m.offset / m.userptr / m.fd
+        └── length
+
+          ▲ ioctl 进入内核时 copy_from_user
+          │ ioctl 返回时   copy_to_user
+          ▼
+
+内核 vb2 层
+    struct vb2_v4l2_buffer       ← V4L2 封装层，内核内部使用
+        ├── vb2_buf              ← struct vb2_buffer （核心 buffer）
+        ├── flags                ← 和 v4l2_buffer 的 flags 对应
+        ├── field
+        ├── timecode
+        └── sequence
+
+    struct vb2_buffer            ← 核心 buffer
+        ├── index
+        ├── planes[]
+        └── state                ← 状态机（用户完全看不见）
+
+    struct vb2_plane             ← 每个 plane 的描述
+        ├── mem_priv             ← ★ 指向真正的数据内存
+        ├── bytesused
+        ├── length
+        └── m.offset / ...
+</code></pre><p>入队列流程：</p><pre><code>APP调用ioctl VIDIOC_QBUF
+
+驱动程序根据其index找到vb2_buffer
+
+把这个vb2_buffer放入链表vb2_queue.queued_list
+</code></pre><p>硬件驱动接收到数据后，比如URB传输完成后：</p><pre><code>从链表vb2_queue.queued_list找到(但是不移除)vb2_buffer
+
+把硬件数据存入vb2_buffer
+
+把vb2_buffer放入链表vb2_queue.done_list
+</code></pre><p>出队列流程：</p><pre><code>APP调用ioctl VIDIOC_DQBUF
+
+驱动程序从链表vb2_queue.done_list取出并移除第1个vb2_buffer
+
+驱动程序也把这个vb2_buffer从链表vb2_queue.queued_list移除
+</code></pre><h3 id=videobuffer2的3个ops>videobuffer2的3个ops</h3><p><img src=image-20260712200458-4m8mx9t.png alt=image></p><p>在vb2管理队列中有三个ops</p><p>这三个结构体的作用为</p><p><code>const struct vb2_buf_ops *buf_ops</code>：在用户空间、内核空间之间传递buffer信息，通过下面几个宏来调用</p><p><img src=image-20260712200649-xhmukte.png alt=image></p><p><code>const struct vb2_mem_ops *mem_ops</code>：分配内存用的回调函数，通过下面几个宏来调用</p><p><img src=image-20260712200718-glpdkzf.png alt=image></p><p><code>const struct vb2_ops *ops</code>：硬件相关的回调函数，通过下面几个宏来调用</p><p><img src=image-20260712200728-cap7kr2.png alt=image></p><p>这3个ops的层次图如下：</p><p><img src=image-20260712201055-pkoxolj.png alt=image></p><p>‍</p><p>‍</p><h1 id=控制流media-framework>控制流media framework</h1><p>‍</p><h1></h1><p>‍</p></div></article></main><footer class=site-footer><p>&copy; 2026 Linux 学习笔记. Built with Hugo.</p></footer></div></body></html>
