@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>写文章</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f5; color: #333; }
+
+.toolbar {
+  position: sticky; top: 0; z-index: 10;
+  background: #fff; border-bottom: 1px solid #ddd;
+  padding: 0.5rem 1rem; display: flex; gap: 0.3rem; flex-wrap: wrap;
+  align-items: center;
+}
+.toolbar button {
+  padding: 0.35rem 0.6rem; border: 1px solid #ddd; border-radius: 4px;
+  background: #fff; cursor: pointer; font-size: 0.85rem; line-height: 1;
+}
+.toolbar button:hover { background: #e8f0fe; border-color: #1890ff; }
+.toolbar .sep { width: 1px; height: 1.2rem; background: #ddd; margin: 0 0.2rem; }
+
+.container { display: flex; height: calc(100vh - 50px); }
+.editor-pane { flex: 1; display: flex; flex-direction: column; border-right: 1px solid #ddd; }
+.preview-pane { flex: 1; overflow-y: auto; padding: 1.5rem 2rem; background: #fff; }
+
+#titleInput {
+  width: 100%; padding: 0.8rem 1rem; font-size: 1.3rem; font-weight: 700;
+  border: none; border-bottom: 1px solid #eee; outline: none;
+}
+#bodyInput {
+  flex: 1; width: 100%; padding: 1rem; font-size: 0.9rem; line-height: 1.6;
+  border: none; outline: none; resize: none; font-family: "Fira Code", "Consolas", monospace;
+}
+
+#preview {
+  max-width: 720px; line-height: 1.75; font-size: 0.95rem;
+}
+#preview h1 { font-size: 1.45rem; margin: 1.5rem 0 0.5rem; border-bottom: 1px solid #eee; padding-bottom: 0.3rem; }
+#preview h2 { font-size: 1.3rem; margin: 1.2rem 0 0.4rem; }
+#preview h3 { font-size: 1.15rem; margin: 1rem 0 0.3rem; }
+#preview pre { background: #282c34; color: #abb2bf; padding: 1rem; border-radius: 6px; overflow-x: auto; margin: 0.5rem 0; font-size: 0.82rem; }
+#preview code { background: #f0f0f0; padding: 0.15rem 0.3rem; border-radius: 3px; font-size: 0.85em; }
+#preview pre code { background: none; padding: 0; color: inherit; }
+#preview img { max-width: 100%; border-radius: 4px; margin: 0.5rem 0; }
+#preview table { border-collapse: collapse; margin: 0.5rem 0; font-size: 0.9rem; width: 100%; }
+#preview th, #preview td { border: 1px solid #ddd; padding: 0.4rem 0.6rem; }
+#preview th { background: #f0f0f0; }
+#preview blockquote { border-left: 3px solid #1890ff; margin: 0.5rem 0; padding: 0.4rem 1rem; background: #f8f9fa; color: #666; }
+#preview ul, #preview ol { margin: 0.3rem 0 0.3rem 1.5rem; }
+
+.bottom-bar {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: #fff; border-top: 1px solid #ddd;
+  padding: 0.5rem 1rem; display: flex; gap: 0.5rem; align-items: center;
+}
+.bottom-bar input { flex: 1; padding: 0.4rem 0.6rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.8rem; }
+.btn { padding: 0.4rem 1rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+.btn-primary { background: #1890ff; color: #fff; }
+.btn-primary:hover { background: #096dd9; }
+.btn-success { background: #52c41a; color: #fff; }
+.btn-success:hover { background: #389e0d; }
+.toast { display: none; position: fixed; top: 1rem; right: 1rem; background: #52c41a; color: #fff; padding: 0.5rem 1rem; border-radius: 4px; font-size: 0.85rem; z-index: 100; }
+</style>
+</head>
+<body>
+
+<div class="toolbar" id="toolbar">
+  <button onclick="wrap('**','**')" title="加粗"><b>B</b></button>
+  <button onclick="wrap('*','*')" title="斜体"><i>I</i></button>
+  <button onclick="wrap('`','`')" title="行内代码">&lt;/&gt;</button>
+  <div class="sep"></div>
+  <button onclick="wrap('### ','')" title="标题">H</button>
+  <button onclick="wrap('- ','')" title="列表">列表</button>
+  <button onclick="insertNumList()" title="编号列表">1.</button>
+  <button onclick="wrap('> ','')" title="引用">引用</button>
+  <div class="sep"></div>
+  <button onclick="insertTable()" title="表格">表格</button>
+  <button onclick="insertCode()" title="代码块">{ }</button>
+  <button onclick="insertImage()" title="图片">图片</button>
+  <div class="sep"></div>
+  <button onclick="insertFile()" title="插入本地文件">📎</button>
+  <span style="font-size:0.8rem;color:#999;margin-left:auto" id="wordCount">0 字</span>
+</div>
+
+<div class="container">
+  <div class="editor-pane">
+    <input id="titleInput" placeholder="文章标题" />
+    <textarea id="bodyInput" placeholder="开始写文章..." oninput="updatePreview()"></textarea>
+  </div>
+  <div class="preview-pane">
+    <div id="preview"></div>
+  </div>
+</div>
+
+<div class="bottom-bar">
+  <input id="tagInput" placeholder="标签（逗号分隔）" />
+  <button class="btn btn-primary" onclick="copyMarkdown()">📋 复制 Markdown</button>
+  <button class="btn btn-success" onclick="showGitCommand()">🚀 显示推送命令</button>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+const bodyEl = document.getElementById('bodyInput');
+const titleEl = document.getElementById('titleInput');
+const previewEl = document.getElementById('preview');
+const toastEl = document.getElementById('toast');
+
+function showToast(msg) {
+  toastEl.textContent = msg;
+  toastEl.style.display = 'block';
+  setTimeout(() => toastEl.style.display = 'none', 2000);
+}
+
+function wrap(before, after) {
+  const ta = bodyEl;
+  const start = ta.selectionStart, end = ta.selectionEnd;
+  const text = ta.value;
+  const selected = text.substring(start, end);
+  const newText = text.substring(0, start) + before + selected + after + text.substring(end);
+  ta.value = newText;
+  ta.focus();
+  const pos = start + before.length + selected.length + after.length;
+  ta.setSelectionRange(pos, pos);
+  updatePreview();
+}
+
+function insertNumList() {
+  wrap('1. ', '');
+}
+
+function insertCode() {
+  const ta = bodyEl;
+  const start = ta.selectionStart, end = ta.selectionEnd;
+  const selected = ta.value.substring(start, end);
+  const code = selected ? selected : '代码';
+  const newText = ta.value.substring(0, start) + '\n```c\n' + code + '\n```\n' + ta.value.substring(end);
+  ta.value = newText;
+  ta.focus();
+  const pos = start + 5 + code.length + 5;
+  ta.setSelectionRange(pos, pos);
+  updatePreview();
+}
+
+function insertTable() {
+  const table = '\n| 列1 | 列2 | 列3 |\n|------|------|------|\n| 内容 | 内容 | 内容 |\n';
+  insertAtCursor(table);
+}
+
+function insertImage() {
+  const url = prompt('图片URL或文件名：', 'image.png');
+  if (url) insertAtCursor('\n![](' + url + ')\n');
+}
+
+function insertFile() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.md,.txt,.c,.h,.py';
+  input.onchange = function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      const content = ev.target.result;
+      if (file.name.endsWith('.md')) {
+        // Try to extract title from front matter
+        const titleMatch = content.match(/^---[\s\S]*?title:\s*"([^"]+)"[\s\S]*?---\n?/);
+        if (titleMatch) {
+          titleEl.value = titleMatch[1];
+          const body = content.replace(/^---[\s\S]*?---\n?/, '');
+          bodyEl.value = body.trim();
+        } else {
+          bodyEl.value = content;
+        }
+      } else {
+        const lang = file.name.endsWith('.c') ? 'c' : file.name.endsWith('.py') ? 'python' : '';
+        if (lang) {
+          bodyEl.value += '\n```' + lang + '\n' + content + '\n```\n';
+        } else {
+          bodyEl.value += content;
+        }
+      }
+      updatePreview();
+      showToast('已导入 ' + file.name);
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+}
+
+function insertAtCursor(text) {
+  const ta = bodyEl;
+  const start = ta.selectionStart;
+  const newText = ta.value.substring(0, start) + text + ta.value.substring(ta.selectionEnd);
+  ta.value = newText;
+  ta.focus();
+  const pos = start + text.length;
+  ta.setSelectionRange(pos, pos);
+  updatePreview();
+}
+
+function updatePreview() {
+  const text = bodyEl.value;
+  document.getElementById('wordCount').textContent = text.length + ' 字';
+  const html = simpleMarkdown(text);
+  previewEl.innerHTML = html;
+}
+
+function simpleMarkdown(md) {
+  let h = md;
+  // Code blocks first
+  h = h.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+  // Headings
+  h = h.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  h = h.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  h = h.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  // Tables
+  h = h.replace(/\|(.+)\|/g, function(m) {
+    if (m.includes('---')) return m.replace(/\|([-\s:|]+)\|/g, '');
+    return '<tr>' + m.split('|').filter(c => c.trim()).map(c => '<td>' + c.trim() + '</td>').join('') + '</tr>';
+  });
+  h = h.replace(/(<tr>.*<\/tr>(\s*<tr>.*<\/tr>)*)/g, '<table>$1</table>');
+  // Blockquote
+  h = h.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+  // Images
+  h = h.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" />');
+  // Links
+  h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  // Inline code
+  h = h.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Bold/Italic
+  h = h.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  h = h.replace(/\*([^*]+)\*/g, '<i>$1</i>');
+  // Lists
+  h = h.replace(/^- (.+)$/gm, '<li>$1</li>');
+  h = h.replace(/(<li>.*<\/li>(\s*<li>.*<\/li>)*)/g, '<ul>$1</ul>');
+  h = h.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  h = h.replace(/(<li>.*<\/li>(\s*<li>.*<\/li>)*)/g, function(m) {
+    return m.startsWith('<ul') ? m : '<ol>' + m + '</ol>';
+  });
+  // Paragraphs
+  h = h.replace(/\n\n/g, '</p><p>');
+  h = h.replace(/^(?!<[houbtpl])/gm, '');
+  h = '<p>' + h + '</p>';
+  // Clean up empty tags
+  h = h.replace(/<p><\/p>/g, '');
+  h = h.replace(/<\/ul>\s*<ul>/g, '');
+  h = h.replace(/<\/ol>\s*<ol>/g, '');
+  return h;
+}
+
+function generateMarkdown() {
+  const title = titleEl.value.trim();
+  const date = new Date().toISOString().split('T')[0];
+  const tags = document.getElementById('tagInput').value.split(/[,，]/).map(t => t.trim()).filter(Boolean);
+  const body = bodyEl.value.trim();
+  if (!title) { showToast('请填写标题'); return null; }
+  let md = '---\n';
+  md += 'title: "' + title + '"\n';
+  md += 'date: ' + date + '\n';
+  md += 'draft: false\n';
+  md += 'slug: "' + title.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-').replace(/^-|-$/g, '') + '"\n';
+  if (tags.length) md += 'tags: ' + JSON.stringify(tags) + '\n';
+  md += 'summary: "' + body.replace(/\n.*/s, '').substring(0, 100) + '"\n';
+  md += '---\n\n';
+  md += body + '\n';
+  return md;
+}
+
+function copyMarkdown() {
+  const md = generateMarkdown();
+  if (!md) return;
+  navigator.clipboard.writeText(md).then(() => showToast('已复制到剪贴板')).catch(() => {
+    // Fallback
+    const ta = document.createElement('textarea');
+    ta.value = md;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast('已复制到剪贴板');
+  });
+}
+
+function showGitCommand() {
+  const md = generateMarkdown();
+  if (!md) return;
+  const slug = titleEl.value.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-').replace(/^-|-$/g, '') || 'post';
+  const filepath = 'content/posts/' + slug + '.md';
+  alert(
+    '1. 在项目目录创建文件:\n' +
+    '   cd C:\\Users\\54161\\Documents\\个人网站\n' +
+    '   将复制的内容保存到 ' + filepath + '\n\n' +
+    '2. 推送:\n' +
+    '   git add ' + filepath + '\n' +
+    '   git commit -m "新文章: ' + titleEl.value.trim() + '"\n' +
+    '   git push\n\n' +
+    '（或者直接把内容贴给我，我来帮你推送）'
+  );
+}
+</script>
+</body>
+</html>
