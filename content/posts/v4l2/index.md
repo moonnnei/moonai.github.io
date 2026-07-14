@@ -1,8 +1,8 @@
-﻿---
-slug: "v4l2"
+---
 title: "V4L2 驱动框架深度分析"
 date: 2026-07-13
 draft: false
+slug: "v4l2"
 tags: ["Linux内核", "V4L2", "驱动开发", "视频设备"]
 summary: "深入分析 Linux V4L2 驱动框架，涵盖数据结构、注册流程、ioctl 调用链、videobuf2 缓冲区管理。"
 ---
@@ -563,11 +563,389 @@ struct vb2_v4l2_buffer {
 
 # 控制流media framework
 
+## 引入subdev与media子系统
+
+### subdev引入
+
+对于简单摄像头，把它抽象为一个结构体video_device，不需要subdev，没有media
+
+但对于相对复杂的USB摄像头设备，内部有各种unit和terminal
+
+#### UVC驱动
+
+USB摄像头稍微复杂一点，它的内部有各类Unit或Terminal
+
+![image](image-20260713170243-roxh0cz.png)
+
+这些unit、terminal独立性不强，遵循UVC规范，没必要单独为他们编写驱动程序
+
+在uvc驱动程序中，每一个unit、terminal都抽象出一个`uvc_entity`​，内嵌一个v4l2_subdev，v4l2_subdev用来描述硬件能干什么，一个 subdev 天然地对应一个 media\_entity，meida_entity描述数据从哪来到哪去
+
+uvc_entity（代表UVC的某个Unit/Terminal）  
+  └── struct v4l2_subdev subdev（V4L2子设备）  
+              └── struct media_entity entity（MC拓扑节点）
+
+uvc_entity定义一个v4l2_subdev
+
+![image](image-20260713170734-ss52kjd.png)![image](image-20260713175138-sbfay7y.png)
+
+这些subdev里的ops都是空的
+
+![image](image-20260713170915-b5z8qlc.png)
+
+#### 复杂驱动
+
+一个复杂的摄像头模块需要很多相对独立的模块，对这些模块需要单独编写程序
+
+这些模块被抽象为subdev，原因有2：
+
+1.屏蔽硬件操作的细节，有些模块是I2C接口的，有些模块是SPI接口的，它们都被封装为subdev
+
+2.方便内核使用、APP使用：可以在内核里调用subdev的函数，也可以在用户空间调用subdev的函数：很多厂家不愿意公开ISP的源码，只能在驱动层面提供最简单的subdev，然后通过APP调用subdev的基本读写函数进行复杂的设置。
+
+subdev结构体如下：
+
+![image](image-20260713175616-iv7x6ux.png)
+
+里面有各类ops结构体，比如core、tuner、audio、video等等。编写subdev驱动程序时，核心就是实现各类ops结构体的函数。
+
+![image](image-20260713175731-9jdecnz.png)
+
+### media引入
+
+对每一个subdev编写好驱动程序后，需要描述他们之间的关系
+
+![image](image-20260713180619-i4n80kl.png)
+
+数据流的去向，数据格式的设置都需要一个系统来描述
+
+因此引入media子系统，简化如下
+
+![image](image-20260713180836-46521nv.png)
+
+在media子系统中描述控制流，需要entity实体代表对象，需要pad表示端口，需要一个link代表pad之间的连接，最后需要一个pipeline描述正在跑的流路径
+
+在media子系统里，
+
+- 每个对象都是一个media_entity
+- media_entity有media_pad，可以认为是端点（不能简单认为是硬件引脚），有source pad（输出数据），sink pad（输入数据）
+- media_entity之间的连接被称为media_link
+- media_link仅仅表示两个media_entity之间的连接，要构成一个完整的数据通道，需要多个系列的连接，这被称为pipeline
+- media子系统的作用就在于管理"拓扑关系"，就是各个对象的连接关系。
+
 ‍
 
-# 
+media子系统在于管理子设备的拓扑关系
+
+在subdev中有各个对象的操作函数，用于操作各个对象
+
+## subdev概览与数据结构
+
+### 概览
+
+![image](image-20260713202048-a2oihz9.png)
+
+![image](image-20260713194112-8hv19ka.png)
+
+subdev的核心是各种操作函数
+
+添加一个子设备，需要分配设置一个subdev，subdev通常嵌入在一个更大的结构体里面
+
+![image](image-20260713195818-hhl0lvn.png)​​![image](image-20260713195901-5rfwuoe.png)
+
+![image](image-20260713200253-4idzgvj.png)
+
+![image](image-20260713200323-cr3fyao.png)​​![image](image-20260713200406-qwuflzd.png)
+
+ops传进来了
+
+![image](image-20260713200815-wecq8ya.png)
+
+### 数据结构
+
+一个模块对应一个subdev
+
+![image](image-20260713175616-iv7x6ux.png)
+
+这些subdev放入一个链表中进行管理
+
+![image](image-20260713201509-zamzfic.png)
 
 ‍
 
+## media概览与数据结构
 
+### 拓扑结构
 
+将subdev注册到一个链表进行管理，但各个模块之间的连接关系需要media子系统来进行描述
+
+在subdev结构体中存放有entity，entity便是media进行拓扑管理的核心
+
+在entity中放有pads指针和link链表
+
+pad指针指向media_pad，其中包含当前模块的pad的index，标志是源source还是接收sink，以及指向subdev的指针用于找到当前pad对应的子设备
+
+link链表中，描述了当前的源端（source）pad，下一个汇端（sink）pad，以及描述传递方向的is_backlink,为0链表存放在当前entity，为1存放在下一个entity
+
+这样，从前一个subdev到下一个subdev的拓扑链路打通了
+
+![image](image-20260713201721-2gy724n.png)
+
+#### 补充
+
+```c
+struct A {
+    struct B b;
+    int data;
+};
+
+struct B {
+    struct A *a_ptr;    // 里面有回到 A 的指针
+    int x;
+};
+
+// 用法：
+struct A a;
+a.b.a_ptr = &a;          // ★ 初始化时把指针指向自己
+
+struct B *bp = &a.b;
+struct A *ap = bp->a_ptr; // 直接拿到 A
+ap->data = 42;             // 能访问
+```
+
+这叫做"反向指针"（back pointer），可从内嵌结构体包含上一结构体指针找到上一结构体
+
+‍
+
+### 数据结构
+
+一个media子系统使用"struct media_device"来表示，结构体如下：
+
+![image](image-20260713203717-a9pxhi7.png)
+
+media_device里有多个entity，它使用"struct media_entity"来表示：
+
+![image](image-20260713203726-9ng8w7g.png)
+
+media_entity里有多个pad，它使用"struct media_pad"来表示：
+
+![image](image-20260713203737-g2vkg71.png)
+
+entity通过pad跟其他entity相连，这被称为link，它使用"media_link"来表示：
+
+![image](image-20260713203748-71sjyg3.png)
+
+两个entity之间的连接，被称为link；多个已经使能的link构成一条完整的数据通道，这被称为pipeline。
+
+驱动程序在进行streamon操作时，有些驱动会调用"media_entity_pipeline_start"函数，类似下面的代码：
+
+```c
+ret = media_entity_pipeline_start(sensor, camif->m_pipeline);
+```
+
+第1个参数是第1个entity，第2个参数就是pipeline（它在media_entity_pipeline_start函数内部构造）。
+
+media_entity_pipeline_start的目的，是从第1个entity开始，遍历所有的link，把已经使能的link都执行"link_validate"。
+
+media_entity_pipeline_start内部，是按照深度优先来操作entity的，以下图为例：
+
+- 有两条pipeline：e0->e1->e2->e3，e0->e1->e4->e5
+- 先遍历e0->e1->e2->e3这条pipeline，调用e3、e2的"link_validate"
+- 再遍历e0->e1->e4->e5这条pipeline，调用e5、e4的"link_validate"
+- 接着处理e1，调用它的"link_validate"
+- 最后处理e0，它没有sink pad，无需调用它的"link_validate"
+
+![image](image-20260713204416-fwj4xew.png)
+
+‍
+
+### media子系统和subdev的关系
+
+内核空间，v4l2\_subdev里含有media\_entity，两者都很容易找到对方：
+
+![image](image-20260713210125-qykvs4j.png)
+
+从entity找到subdev，使用以下代码：
+
+```shell
+#define media_entity_to_v4l2_subdev(ent) \
+	container_of(ent, struct v4l2_subdev, entity)
+```
+
+‍
+
+## subdev的注册与使用
+
+### 内核注册流程
+
+subdev里含有模块的操作函数，谁调用这些函数？
+
+内核调用：subdev完全可以不暴露给用户，在摄像头驱动程序内部"偷偷地"调用subdev的函数，用户感觉不到subdev的存在。
+
+APP调用：对于比较复杂的硬件，驱动程序应该"让用户有办法调节各类参数"，比如ISP模块几乎都是闭源的，对它的设置只能通过APP进行。这类subdev的函数，应该暴露给用户，用户可以调用它们。
+
+在内核里，subdev的注册分两步
+
+①放入v4l2_device链表
+
+```c
+  int v4l2_device_register_subdev(struct v4l2_device *v4l2_dev,
+  				struct v4l2_subdev *sd);
+  
+  // 核心代码
+  list_add_tail(&sd->list, &v4l2_dev->subdevs);
+```
+
+![image](image-20260713215456-fmzpvps.png)
+
+在向v4l2_device注册时会检查是否向用户层注册字符设备
+
+![image](image-20260713215716-ncw5x9j.png)
+
+进行相关的设置
+
+![image](image-20260713215805-wfl081n.png)
+
+添加进链表
+
+②注册为字符驱动设备/node（节点）   （可选）
+
+v4l2_device_register_subdev_nodes：遍历v4l2_device链表里各个subdev，如果它想暴露给APP，就把它注册为普通字符设备
+
+```c
+  int v4l2_device_register_subdev_nodes(struct v4l2_device *v4l2_dev);
+  
+  // 调用过程如下
+  v4l2_device_register_subdev_nodes
+  	struct video_device *vdev;
+  	vdev->fops = &v4l2_subdev_fops;
+  	err = __video_register_device(vdev, VFL_TYPE_SUBDEV, -1, 1,
+  					      sd->owner);
+  		name_base = "v4l-subdev";
+  		vdev->cdev->ops = &v4l2_fops;
+  		ret = cdev_add(vdev->cdev, MKDEV(VIDEO_MAJOR, vdev->minor), 1);
+```
+
+![image](image-20260713220047-v0m7rsp.png)
+
+将video_device作为子设备使用
+
+![image](image-20260713220201-c6hj5bx.png)
+
+遍历v4l2_device链表里各个subdev，如果有标志要暴露给用户层，就注册为普通字符设备
+
+先申请分配一个vdev，将sd数据放入vdev
+
+![image](image-20260713220449-203z040.png)
+
+再将fops放入其中，调用__video_register_device
+
+在__video_register_device中，根据type设置设备名称
+
+![image](image-20260713220636-gytk8nu.png)
+
+传递fops
+
+![image](image-20260713220901-sj4h23m.png)
+
+添加设备
+
+![image](image-20260713220944-lwneekx.png)
+
+v4l2_device_register_subdev_nodes的注册过程涉及2个结构体：
+
+file_operations：  
+
+![image](image-20260713214717-yy5stys.png)
+
+v4l2_file_operations：
+
+![image](image-20260713214727-j4ui0kb.png)
+
+注册完，内核里的结构体如下
+
+![image](image-20260713215255-8n291lj.png)
+
+‍
+
+### 用户态使用subdev
+
+### media的注册与使用
+
+#### 内核注册过程
+
+总图如下：
+
+![image](image-20260713231533-xklvfsb.png)
+
+##### 两个层次
+
+media子系统的注册分为2个层次：
+
+- 描述自己的media_entity：各个subdev里含有media_entity，但是多个media_entity之间的关系由更上层的驱动决定
+- 描述media_entity之间的联系：更上层的、统筹的驱动：它知道各个subdev即各个media_entity之间的联系：link
+
+##### 四个步骤
+
+media子系统的注册分为4个步骤：
+
+描述自己：各个底层驱动构造subdev时，顺便初始里面的media_entity：比如这个media_entity有哪些pad
+
+```c
+// 示例
+// drivers\media\platform\sunxi-vin\modules\sensor\gc2053_mipi.c: cci_dev_probe_helper
+// drivers\media\platform\sunxi-vin\vin-cci\cci_helper.c: cci_media_entity_init_helper
+media_entity_pads_init(&sd->entity, SENSOR_PAD_NUM, si->sensor_pads);
+```
+
+注册自己：底层或上层注册subdev时，顺便注册media_entity：把media_entity记录在media_device里
+
+```c
+// 示例
+// drivers\media\platform\sunxi-vin\vin.c
+vin_md_register_entities
+    v4l2_device_register_subdev
+    	struct media_entity *entity = &sd->entity;
+    	err = media_device_register_entity(v4l2_dev->mdev, entity);
+```
+
+和别人建立联系：subdev之上的驱动程序决定各个media_entity如何连接：比如调用media_create_pad_link创建连接
+
+```c
+// 示例
+// drivers\media\platform\sunxi-vin\vin.c
+ret = media_create_pad_link(source, SCALER_PAD_SOURCE,
+						sink, VIN_SD_PAD_SINK,
+						MEDIA_LNK_FL_ENABLED);
+```
+
+暴露给APP使用：subdev之上的驱动程序注册media_device: media_device里已经汇聚了所有的media_entity
+
+```c
+// 示例
+// drivers\media\platform\sunxi-vin\vin.c
+vin_probe
+    ret = media_device_register(&vind->media_dev);
+```
+
+在内核里，media子系统的注册过程为：
+
+```shell
+media_device_register
+	__media_device_register
+		struct media_devnode *devnode;
+		devnode->fops = &media_device_fops;
+		ret = media_devnode_register(mdev, devnode, owner);
+        	cdev_init(&devnode->cdev, &media_devnode_fops);
+        	ret = cdev_add(&devnode->cdev, MKDEV(MAJOR(media_dev_t), devnode->minor), 1);
+```
+
+上述注册过程涉及2个结构体：
+
+`file_operations`
+
+![image](image-20260713231752-p7f0idg.png)
+
+`media_file_operations`
+
+![image](image-20260713231825-rub9jq9.png)
