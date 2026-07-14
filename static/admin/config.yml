@@ -1,9 +1,7 @@
-﻿backend:
+backend:
   name: github
   repo: moonnnei/moonai.github.io
   branch: main
-  auth_type: pkce
-  app_id: "Ov23liOpgIWtdNGc6aIu"
 
 media_folder: "static/images/uploads"
 public_folder: "/moonai.github.io/images/uploads"
